@@ -1,16 +1,12 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Provider } from "@/components/provider";
-import { appName } from "@/lib/shared";
+import { appName, siteUrl } from "@/lib/shared";
 import "./global.css";
 
 const inter = Inter({
   subsets: ["latin"],
 });
-
-// where the site actually lives, so open graph image urls come out absolute
-const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL ?? "https://xoifaii.github.io/LedgerDocs";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
