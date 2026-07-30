@@ -1,0 +1,118 @@
+---
+title: Ledger
+description: The top level module.
+---
+
+```luau
+local Ledger = require(ServerStorage.Ledger)
+```
+
+## Ledger.New
+
+```luau
+Ledger.New<D>(Options: Config<D>) -> Store<D>
+```
+
+Builds a store. Throws on anything wrong with the options, at build time, rather than letting it
+misbehave later.
+
+| Option | Type | |
+| --- | --- | --- |
+| `Name` | `string` | Required. The datastore name, 1 to 47 characters. |
+| `Reducer` | `(State, Op) -> State?` | Required. See [Writing a reducer](/docs/concepts/reducer). |
+| `Default` | `D` | Required. The fresh state table. |
+| `Balance` | `string?` | Names a number field for [transfers](/docs/guides/transfers). |
+| `Migrations` | `{ Migration }?` | See [Migrations](/docs/guides/migrations). |
+| `Keys` | `"Player" \| "String"` | Defaults to `"Player"`. |
+
+The name caps at 47 rather than the datastore's 50 because Ledger also creates `<Name>_Tx` for
+transaction markers.
+
+`Default` can't declare any key starting with `_`, and it has to be storable, so JSON only.
+
+Two stores can't share a name in one server. Call `Store:Destroy()` first if you need to rebuild
+one.
+
+## Ledger.Reason
+
+The nine reasons, as constants. See [Reasons](/docs/concepts/reasons).
+
+```luau
+Ledger.Reason.Refused
+Ledger.Reason.Busy
+Ledger.Reason.Spent
+Ledger.Reason.Unresolved
+Ledger.Reason.Closed
+Ledger.Reason.Backlog
+Ledger.Reason.Full
+Ledger.Reason.Invalid
+Ledger.Reason.Behind
+```
+
+## Ledger.UseMock
+
+```luau
+Ledger.UseMock(Options: { Players: number?, Throttled: boolean? }?) -> Service
+```
+
+Points every store built after this call at an in memory datastore. `Players` sizes the request
+budget, `Throttled` defaults to true. See [Testing](/docs/guides/testing).
+
+## Ledger.UseReal
+
+```luau
+Ledger.UseReal() -> ()
+```
+
+Back to the real `DataStoreService`. Only affects stores built after the call.
+
+## Ledger.UseClock
+
+```luau
+Ledger.UseClock(Reads: (() -> number)?) -> ()
+```
+
+Swaps the function Ledger reads the time from. Pass `nil` to go back to `os.time`.
+
+## Ledger.Sweep
+
+```luau
+Ledger.Sweep() -> ()
+```
+
+Forces a background maintenance pass right now: finish stranded transfers, settle stuck transaction
+legs, tidy up old markers. The sweeper does this on its own, so this is for tests and incidents.
+
+## Ledger.CloseAll
+
+```luau
+Ledger.CloseAll() -> ()
+```
+
+Shuts everything down. Stops the sweeper, tells every queue to skip ahead to the last write, saves
+every live session, and yields until it's all done.
+
+Put this in `BindToClose` and nothing else.
+
+```luau
+game:BindToClose(function()
+	Ledger.CloseAll()
+end)
+```
+
+## Exported types
+
+```luau
+Ledger.Store<D>
+Ledger.Session<S>
+Ledger.Op
+Ledger.Reducer<S>
+Ledger.Reason
+Ledger.KeyLike
+Ledger.KeysMode
+Ledger.TxLeg
+Ledger.Migration
+Ledger.Config<D>
+```
+
+See [Types](/docs/reference/types).

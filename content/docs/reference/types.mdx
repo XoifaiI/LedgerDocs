@@ -1,0 +1,166 @@
+---
+title: Types
+description: What Ledger exports for strict mode.
+---
+
+Everything here is exported off the top level module, so `Ledger.Op`, `Ledger.Store` and so on.
+
+## Op
+
+```luau
+type Op = {
+	Id: string,
+	Kind: string,
+	[any]: any,
+}
+```
+
+One change. `Id` and `Kind` are Ledger's, everything else is yours.
+
+`Id`, `Kind` and `OnceAt` are reserved. Passing any of them in `Fields` warns and gets overwritten.
+
+`Once` is yours to set, and it's what makes the op apply at most one time on that key. See
+[Once](/docs/concepts/once).
+
+Every method that can fail answers `(value?, Reason?)` or `(boolean, Reason?)`. Nothing in Ledger
+throws into a Future, so `Wait` never comes back empty on you. See
+[Reasons](/docs/concepts/reasons).
+
+## Reducer
+
+```luau
+type Reducer<S> = (State: S, Op: Op) -> S?
+```
+
+See [Writing a reducer](/docs/concepts/reducer).
+
+## Reason
+
+```luau
+type Reason =
+	"Refused" | "Busy" | "Spent" | "Unresolved" | "Closed"
+	| "Backlog" | "Full" | "Invalid" | "Behind"
+```
+
+Compare against `Ledger.Reason.Refused` and friends rather than the literals. See
+[Reasons](/docs/concepts/reasons).
+
+## KeyLike
+
+```luau
+type KeyLike = number | string
+```
+
+A UserId on a player store, a key string on an entity store. Ledger checks which one the store wants
+and throws with what it expected.
+
+## KeysMode
+
+```luau
+type KeysMode = "Player" | "String"
+```
+
+## Config
+
+```luau
+type Config<D> = {
+	read Name: string,
+	read Reducer: (State: D, Op: Op) -> unknown,
+	read Default: D,
+	read Balance: string?,
+	read Migrations: { Migration }?,
+	read Keys: KeysMode?,
+}
+```
+
+What `Ledger.New` takes. See [Ledger.New](/docs/reference/ledger#ledgernew).
+
+## Migration
+
+```luau
+type Migration =
+	((State: any) -> any)
+	| { Apply: (State: any) -> any, Compatible: boolean? }
+```
+
+A plain function, or a table when you need `Compatible`. See
+[Migrations](/docs/guides/migrations).
+
+## TxLeg
+
+```luau
+type TxLeg = {
+	Store: Store<any>?,
+	UserId: number?,
+	Key: string?,
+	Kind: string,
+	Fields: { [any]: any }?,
+}
+```
+
+One leg of a transaction. `Store` defaults to the one you called `Tx` on. Use `UserId` for a player
+store and `Key` for a string keyed one.
+
+## HistoryEntry
+
+```luau
+type HistoryEntry = {
+	Version: string,
+	At: number,
+	Deleted: boolean,
+}
+```
+
+`At` is Unix seconds. `Version` is what you hand to `PeekVersion`.
+
+## Future
+
+What every method that touches the datastore hands back. The work starts at the call, `:Wait()`
+parks your thread until it's done.
+
+```luau
+local Job = Store:Peek(UserId)
+DoSomethingElse()
+local State = Job:Wait()
+```
+
+See [Future](/docs/reference/future) for timeouts, error handling, and why a failed read gives you
+`nil`.
+
+## Observer
+
+What `Session:Observe()` hands back. Subscribe for every change that goes through, and chain with
+`Map`, `Filter` and `Changed`.
+
+```luau
+Session:Observe():Subscribe(function(State)
+	UpdateHud(Player, State)
+end)
+```
+
+See [Observer](/docs/reference/observer).
+
+## Typing your own state
+
+Write the state type yourself and let the store carry it:
+
+```luau
+export type Profile = {
+	Gold: number,
+	Items: { string },
+}
+
+local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+	-- ...
+end
+
+local Store: Ledger.Store<Profile> = Ledger.New({
+	Name = "PlayerData",
+	Default = { Gold = 100, Items = {} } :: Profile,
+	Reducer = Reducer,
+})
+```
+
+`Session:Get()` then gives you a `Profile`, and the reserved fields stay out of your type. They're
+there at runtime, your reducer passes them through with `table.clone`, and you don't have to declare
+them.

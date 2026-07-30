@@ -1,0 +1,66 @@
+---
+title: Limits
+description: Every cap Ledger enforces and where it comes from.
+---
+
+Some of these are Roblox's and some are Ledger's. The Roblox ones you can't move. The Ledger ones
+are set below the real limit so you get a clean refusal instead of a failed save.
+
+## Names and keys
+
+| | Cap | |
+| --- | --- | --- |
+| Store name | 47 characters | Ledger, so `<Name>_Tx` fits in the datastore's 50 |
+| Entity key | 50 characters | Roblox |
+| Transfer id | 64 characters | Ledger |
+| Transaction id | 50 characters | Ledger |
+
+Player keys are the UserId, so there's nothing to think about there. Entity keys have to be valid
+UTF-8.
+
+## Size
+
+| | Cap | |
+| --- | --- | --- |
+| Stored value | 4 MB | Roblox |
+| Folded state | 2 MB | Ledger |
+| One op | 1 MB | Ledger |
+| Unsaved ops | 1.5 MB | Ledger |
+| Queued ops | 4096 | Ledger |
+
+State caps at 2 MB rather than 4 so there's room for the ops sitting on top of the snapshot.
+
+An op that would push state over the cap is refused with [`Full`](/docs/concepts/reasons). Ops that
+shrink it are still allowed, so a cleanup works when you're already over.
+
+Hitting the unsaved caps gives you [`Backlog`](/docs/concepts/reasons), and in practice that only
+happens when the datastore is down.
+
+## Transactions
+
+Between 2 and 4 legs, and a key can only appear once.
+
+A transaction is considered dead after 60 seconds, so another server will abort it on the original's
+behalf. Committed markers get tidied up in the background about an hour later.
+
+## Transfers
+
+A stranded transfer is redriven for 7 days. After that it expires and refunds. Delivered ids stay in
+the receiver's applied set for 30 days so a late retry can't pay twice.
+
+Recovery handles up to 32 holds per pass, so a key with a lot stranded takes a few passes.
+
+## Timing
+
+Autosave runs every 30 seconds per session, and compacts as well when the log has gotten long.
+
+An autosave is skipped when the server is under 4 requests of write budget, and it warns.
+
+## Versions
+
+Roblox keeps 30 days of history per key. `History` pages up to 100 at a time and defaults to 25.
+
+## What isn't limited
+
+There's no cap on how many servers write the same key at once. The fold is what buys you that, and
+it's the one number you don't have to plan around.

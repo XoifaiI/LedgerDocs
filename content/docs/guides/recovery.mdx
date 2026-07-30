@@ -1,0 +1,120 @@
+---
+title: Recovery
+description: Version history, resetting a profile, and deleting one properly.
+---
+
+## History
+
+Roblox keeps 30 days of versions for every datastore key, and `History` lists them.
+
+```luau
+local Rows, Why = Store:History(UserId, 25):Wait()
+if Rows == nil then
+	warn(`could not list that history: {Why}`)
+	return
+end
+
+for _, Entry in Rows do
+	print(Entry.Version, os.date("%c", Entry.At), Entry.Deleted)
+end
+```
+
+You get back newest first. `Version` is the string you hand to `PeekVersion`, `At` is a Unix
+timestamp in seconds, and `Deleted` says whether that version was a delete.
+
+The limit is clamped between 1 and 100 and defaults to 25.
+
+## PeekVersion
+
+```luau
+local Was = Store:PeekVersion(UserId, Entry.Version):Wait()
+if Was then
+	print(Was.Gold)
+end
+```
+
+This folds that old record the same way a load would, so migrations run and you get real state, not
+raw storage.
+
+It's read only. There's no restore, and that's deliberate. Writing an old snapshot straight back
+over a live profile would wipe whatever happened in between, including money that arrived from a
+transfer. If you want to roll something back, look at what changed and write ops that undo it.
+
+## Reset
+
+`Reset` puts a key back to `Default`.
+
+```luau
+local Ok, Why = Store:Reset(UserId):Wait()
+```
+
+It's an op like any other, so it goes in the log and every server sees it. It keeps `_Received` and
+`_Held` across, which matters. Wiping the applied id set would let an old retry apply again, and
+wiping the holds would destroy money that's mid transfer.
+
+A server won't reset a record written at a version it doesn't know, so you can't accidentally
+downgrade a profile during a deploy.
+
+It can answer [`Unresolved`](/docs/concepts/reasons) if a stuck transaction leg on that key would
+change the outcome. That means ask again, not that it failed.
+
+## Erase
+
+`Erase` deletes the key outright. This is your GDPR button.
+
+```luau
+local Gone, Why = Store:Erase(UserId):Wait()
+if not Gone then
+	warn(`that key is still there: {Why}`)
+end
+```
+
+Check the answer. If you are erasing to satisfy a deletion request, `false` means it did not happen
+and you have not finished the job.
+
+Before deleting, it checks for money set aside by an in flight transfer and hands it over first, so a
+normal erase doesn't destroy anything that was on its way to someone. If it can't finish the
+handover it warns with how much was lost, and you'll have to pay the receivers back yourself.
+
+Erasing a player who's still in the server warns, because their live session will just write part of
+the record back on its next save. Unload them first:
+
+```luau
+Store:Unload(Player)
+Store:Erase(Player.UserId):Wait()
+```
+
+The delete is still a version, so `History` will show it with `Deleted = true` and the data is
+recoverable through `PeekVersion` for 30 days. Roblox keeps that history whatever Ledger does, so
+know about it before you erase someone for a legal reason.
+
+## Sweeping
+
+Ledger runs a background sweeper that finishes stranded transfers, settles stuck transaction legs,
+and tidies up old transaction markers. It picks up keys it saw a problem on, so most of the time it
+sorts itself out and you never notice.
+
+`Ledger.Sweep()` forces a pass right now. It's useful in a test, or in a live incident when you want
+something dealt with immediately instead of on the next tick.
+
+## Support tooling
+
+The store methods that take a key all work on players who aren't here, so a support tool doesn't
+need the player online:
+
+```luau
+local State, Why = Store:Peek(UserId):Wait()
+if State == nil then
+	warn(`could not read that profile: {Why}`)
+	return
+end
+
+Store:Edit(UserId, "GrantItem", {
+	Item = "Sword",
+	Once = `support:{TicketId}`,
+}):Wait()
+
+local Applied = Store:DidApply(UserId, `support:{TicketId}`):Wait() == true
+```
+
+Put a `Once` name on anything a support tool writes. Someone will click the button twice.

@@ -1,0 +1,136 @@
+---
+title: Session
+description: One player's data, live on this server.
+---
+
+You get one from `Store:Get`, `Store:Expect` or `Store:WaitForLoaded`. Sessions only exist on player
+keyed stores.
+
+## Fields
+
+### LogSize
+
+```luau
+Session.LogSize: number
+```
+
+How many ops are in the stored log. Read only.
+
+### LogBytes
+
+```luau
+Session.LogBytes: number
+```
+
+Roughly how many bytes the stored ops plus the queued ones take. Read only.
+
+## Reading
+
+### Get
+
+```luau
+Session:Get() -> S
+```
+
+Live state. It's deep frozen, so a mutation throws on the line that did it.
+
+### Observe
+
+```luau
+Session:Observe() -> Observer<S>
+```
+
+Fires on every change that goes through, including ones from another server that turned up when a
+transfer or transaction settled. Doesn't fire for a refused op.
+
+```luau
+Session:Observe():Subscribe(function(State)
+	UpdateHud(Player, State)
+end)
+```
+
+This is the session's own stream, not a copy, so don't `Destroy` it. See
+[Observer](/docs/reference/observer) for the chain methods and cleanup.
+
+### DidApply
+
+```luau
+Session:DidApply(Id: string) -> boolean
+```
+
+Whether a [`Once`](/docs/concepts/once) name ever applied on this key. Reads live state, so it
+doesn't yield.
+
+## Writing
+
+### Apply
+
+```luau
+Session:Apply(Kind: string, Fields: { [any]: any }?) -> (boolean, Reason?)
+```
+
+Instant and local. Runs the reducer, updates state, tells observers, queues the op for the next save.
+Never touches the datastore.
+
+Use it for gameplay. See [Apply and Commit](/docs/concepts/apply-and-commit).
+
+### Commit
+
+```luau
+Session:Commit(Kind: string, Fields: { [any]: any }?) -> Future<boolean, Reason?>
+```
+
+Pushes everything queued, appends the op, waits for the datastore, refolds, then answers. `true`
+means it's durable and every server will agree.
+
+Use it for anything you can't take back.
+
+### CommitOp
+
+```luau
+Session:CommitOp(Op: Op) -> Future<boolean, Reason?>
+```
+
+Same as `Commit` but you build the op. Needs a string `Id` and a string `Kind`. A `Once` field, if
+you give one, has to be a non empty string.
+
+```luau
+Session:CommitOp({
+	Id = HttpService:GenerateGUID(false),
+	Kind = "ProductGrant",
+	ProductId = 123456,
+	Once = `receipt:{Receipt.PurchaseId}`,
+}):Wait()
+```
+
+`Id`, `Kind` and `OnceAt` belong to Ledger. Passing them in `Fields` through `Apply` or `Commit`
+warns and gets overwritten.
+
+## Saving
+
+### Flush
+
+```luau
+Session:Flush() -> Future<boolean>
+```
+
+Pushes queued ops without adding one. What autosave calls. `false` means it failed and the ops stay
+queued for next time.
+
+### Compact
+
+```luau
+Session:Compact() -> Future<boolean>
+```
+
+Folds the log down into a fresh snapshot and drops the ops it absorbed. Autosave does this when the
+log gets long, so you rarely need it.
+
+### Release
+
+```luau
+Session:Release() -> Future<boolean>
+```
+
+Marks the session closed and pushes what's left. `Store:Unload` calls this for you, and calling it
+yourself is unusual. Every write afterwards answers [`Closed`](/docs/concepts/reasons).

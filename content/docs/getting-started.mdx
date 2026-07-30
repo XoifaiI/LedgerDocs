@@ -1,0 +1,135 @@
+---
+title: Getting started
+description: Install Ledger, build a store, load a player.
+---
+
+## Install
+
+<Tabs items={['Wally', 'Rojo', 'Model file']}>
+  <Tab value="Wally">
+```toml
+[server-dependencies]
+Ledger = "xoifaii/ledger@3.1.0"
+```
+  </Tab>
+  <Tab value="Rojo">
+Clone the repo and add `src` to your project as `ServerStorage/Ledger`.
+  </Tab>
+  <Tab value="Model file">
+Drop the `Ledger` model anywhere server side. It's one module and it has no dependencies.
+  </Tab>
+</Tabs>
+
+It's a server realm package. Requiring it from a LocalScript won't work, and isn't meant to.
+
+## Build a store
+
+A store is one datastore name plus the rules for everything under it. Build it once, near the top of
+a server script.
+
+```luau
+local Ledger = require(ServerStorage.Ledger)
+
+export type Profile = {
+	Gold: number,
+	Items: { string },
+}
+
+local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+	if Op.Kind == "AddGold" then
+		local Next = table.clone(State)
+		Next.Gold += Op.Amount
+		return Next
+	elseif Op.Kind == "SpendGold" then
+		if Op.Amount > State.Gold then
+			return nil
+		end
+		local Next = table.clone(State)
+		Next.Gold -= Op.Amount
+		return Next
+	end
+
+	return nil
+end
+
+local Store = Ledger.New({
+	Name = "PlayerData",
+	Default = { Gold = 100, Items = {} },
+	Reducer = Reducer,
+	Balance = "Gold",
+})
+```
+
+The reducer takes the state and one op and gives back the next state, or `nil` to refuse it. It has
+to be pure. [Writing a reducer](/docs/concepts/reducer) covers the rules and what breaks when you
+don't keep them.
+
+`Balance` is optional. You only need it for [transfers](/docs/guides/transfers), and it names a
+number field that's already in `Default`.
+
+## Load and unload
+
+```luau
+Players.PlayerAdded:Connect(function(Player)
+	Store:Load(Player)
+end)
+
+Players.PlayerRemoving:Connect(function(Player)
+	Store:Unload(Player)
+end)
+
+game:BindToClose(function()
+	Ledger.CloseAll()
+end)
+```
+
+`Load` yields until the profile is folded, and kicks the player if it can't read it. `Unload` saves
+whatever is queued and yields until that's durable. `CloseAll` does the same thing for every store
+at once, and it's the only thing you need in `BindToClose`.
+
+## Read and write
+
+```luau
+local Session = Store:Expect(Player)
+
+print(Session:Get().Gold)          --> 100
+
+Session:Apply("AddGold", { Amount = 50 })
+print(Session:Get().Gold)          --> 150
+```
+
+`Apply` is instant. It runs your reducer against live state, updates it, and queues the op for the
+next save. You get back `(boolean, Reason?)`, and `false` means either your reducer refused it or
+Ledger did.
+
+When you need the write to be durable before you act on it, use `Commit`:
+
+```luau
+local Ok, Why = Session:Commit("SpendGold", { Amount = 25 }):Wait()
+if not Ok then
+	warn(`could not spend: {Why}`)
+end
+```
+
+[Apply and Commit](/docs/concepts/apply-and-commit) goes into which one to use.
+
+## Watch for changes
+
+```luau
+Session:Observe():Subscribe(function(State)
+	UpdateGoldLabel(Player, State.Gold)
+end)
+```
+
+This fires on every change that goes through, including ones that turn up from another server when a
+transfer or a transaction settles.
+
+## Running without a datastore
+
+```luau
+Ledger.UseMock({ Players = 30 })  -- every store goes in memory, real limits, no API access
+Ledger.UseReal()                  -- back to the real datastore
+```
+
+The mock is stricter than Studio on purpose, because Studio hands you request budgets a live server
+never gets. See [Testing](/docs/guides/testing).

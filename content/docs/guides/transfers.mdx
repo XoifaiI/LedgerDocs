@@ -1,0 +1,103 @@
+---
+title: Transfers
+description: Moving one balance from one key to another without losing any of it.
+---
+
+A transfer moves a number out of one key and into another. It works whether either side is online,
+on another server, or offline, and it can't lose money or make any.
+
+```luau
+local Store = Ledger.New({
+	Name = "PlayerData",
+	Default = { Gold = 100 },
+	Balance = "Gold",
+	Reducer = Reducer,
+})
+
+local Ok, Why = Store:Transfer(FromUserId, ToUserId, 250):Wait()
+```
+
+`Balance` names the field it moves. It has to be a number field that's already in `Default`, and
+without it `Transfer` throws.
+
+## What actually happens
+
+It's three steps, not one write.
+
+**Reserve.** Ledger appends an op to the sender that takes the money out of the balance and puts it
+in `_Held` under a transfer id. If the sender doesn't have enough, your reducer never even sees it,
+the reserve is refused and you get `Refused`.
+
+**Deliver.** It appends an op to the receiver that adds the money and records the transfer id in
+their `_Received`.
+
+**Settle.** It goes back to the sender and drops the hold, because the money has landed.
+
+Money is only ever in one of three places: the sender's balance, the sender's `_Held`, or the
+receiver's balance. There's no moment where it's in two, and no moment where it's in none. That's
+what makes it safe to crash halfway.
+
+## Crashing halfway
+
+If the server dies between reserve and deliver, the money is sitting in the sender's `_Held`. It's
+out of their balance so they can't spend it twice, and it hasn't arrived yet.
+
+Ledger picks that up on its own. A background sweeper notices held money and finishes the job, and
+the sender's next load kicks off a recovery too. You don't have to write a cron job for this and you
+shouldn't call `RecoverTransfers` by hand in normal operation.
+
+If the receiver turns out to be gone or the delivery keeps failing, the hold eventually expires and
+the money goes back to the sender.
+
+## Ids and retries
+
+By default each transfer gets a fresh id, which means calling it twice moves the money twice. That's
+usually what you want for a trade.
+
+When it's a retry of the same logical transfer, name it:
+
+```luau
+local Ok, Why = Store:Transfer(From, To, 250, `trade:{TradeId}`):Wait()
+```
+
+Now a second call with that id doesn't move anything again. You get `Spent` back, which means it
+already happened. Treat `Spent` as success.
+
+Ids are 1 to 64 characters. Derive them from the thing being paid for, so a trade id or an order id,
+never from the clock.
+
+## Reading the answer
+
+`true` means the money moved and both sides are settled.
+
+`Refused` means the sender didn't have it, or the amount wasn't a positive finite number.
+
+`Spent` means this id already moved. The money is where it should be.
+
+`Busy` means a transaction is holding the sender's key. Ledger has already scheduled a cleanup pass,
+try again shortly.
+
+`Unresolved` means the reserve went through but the delivery didn't finish. The money is set aside
+and Ledger will either finish it or refund it on its own. Don't retry with a new id, that would move
+it twice, and don't tell the player it failed.
+
+## Housekeeping
+
+Delivered transfer ids sit in the receiver's `_Received` so a redelivery can't pay twice. They're
+dropped after 30 days, which is well past the point any retry could still turn up.
+
+`Store:ClearDelivered(Key)` forces that pass early. You basically never need it.
+
+`Store:RecoverTransfers(Key)` forces a recovery on one key. The sweeper already does this, so it's
+here for a support tool, or for a live incident where you want one key dealt with right now.
+
+<Callout type="warn">
+  `Store:Erase(Key)` hands over any money still in flight before it deletes, so a normal erase won't
+  destroy it. If the handover itself fails, it warns with how much was lost and you'll have to pay
+  the receivers back yourself.
+</Callout>
+
+## When to use a transaction instead
+
+A transfer moves one balance one way. If you need two different things to move together, like gold
+one way and an item the other, that's a [transaction](/docs/guides/transactions).

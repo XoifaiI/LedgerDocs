@@ -1,0 +1,173 @@
+---
+title: Observer
+description: What Session:Observe gives you back.
+---
+
+```luau
+Session:Observe():Subscribe(function(State)
+	UpdateHud(Player, State)
+end)
+```
+
+An observer is a stream of values you can subscribe to. Ledger pushes the new state onto one every
+time a change goes through, and it hands you that same stream from `Session:Observe()`.
+
+## Subscribe
+
+```luau
+Observer:Subscribe(Listener: (T) -> ()) -> Connection
+```
+
+The connection has a `Connected` boolean and a `Disconnect` method:
+
+```luau
+local Connection = Session:Observe():Subscribe(function(State)
+	print(State.Gold)
+end)
+
+Connection:Disconnect()
+```
+
+It fires on every accepted change, including ones that came from another server and turned up when a
+transfer or transaction settled. It does not fire for a refused op, since nothing changed.
+
+It does not fire on subscribe either. If you need the current value first, call `Session:Get()`
+yourself.
+
+## Listeners run inline
+
+Your listener is called on the thread doing the write, not on a fresh one. Two consequences.
+
+It must not yield. No `task.wait`, no `:Wait()`. Ledger runs it inside a guard that errors if it
+does. If you need to yield, hand the work to `task.spawn` and get out.
+
+A listener that throws is caught and warned, and the rest of the listeners still run. One broken HUD
+update won't stop the others.
+
+Listeners are called over a snapshot of the list, so subscribing or disconnecting from inside a
+listener is safe and takes effect on the next push rather than partway through this one.
+
+## Map
+
+```luau
+Observer:Map(Transform: (T) -> U) -> Observer<U>
+```
+
+```luau
+Session:Observe():Map(function(State)
+	return State.Gold
+end):Subscribe(function(Gold)
+	GoldLabel.Text = tostring(Gold)
+end)
+```
+
+## Filter
+
+```luau
+Observer:Filter(Predicate: (T) -> boolean) -> Observer<T>
+```
+
+```luau
+Session:Observe():Filter(function(State)
+	return State.Gold == 0
+end):Subscribe(ShowBrokeMessage)
+```
+
+## Changed
+
+```luau
+Observer:Changed(Equals: ((T, T) -> boolean)?) -> Observer<T>
+```
+
+Drops a value when it's the same as the one before it. Without an `Equals` it compares with `==`.
+
+<Callout type="warn">
+  Calling `Changed()` straight on `Session:Observe()` filters nothing. Every fold builds a new state
+  table, so `==` is comparing identity and no two pushes are ever equal.
+</Callout>
+
+Compare the thing you actually care about, either with a comparer:
+
+```luau
+Session:Observe():Changed(function(Was, Now)
+	return Was.Gold == Now.Gold
+end):Subscribe(UpdateGoldLabel)
+```
+
+or by mapping down to it first, which is usually what you meant:
+
+```luau
+Session:Observe()
+	:Map(function(State) return State.Gold end)
+	:Changed()
+	:Subscribe(UpdateGoldLabel)
+```
+
+## Use
+
+```luau
+Observer:Use(Middleware: (Value: T, Emit: (U) -> ()) -> ()) -> Observer<U>
+```
+
+The general form the other three are built on. Emit as many times as you like, or not at all:
+
+```luau
+Session:Observe():Use(function(State, Emit)
+	for _, Item in State.Items do
+		Emit(Item)
+	end
+end):Subscribe(print)
+```
+
+## Chains are lazy
+
+`Map`, `Filter`, `Changed` and `Use` don't do anything until something subscribes to the end of the
+chain. The first subscriber wires it up to the source, and the last one to disconnect tears it back
+down.
+
+So building a chain and never subscribing costs nothing, and a chain whose subscribers have all gone
+stops pulling from the session on its own.
+
+## Cleaning up
+
+Nothing disconnects your listeners for you. The session does not clear its observers when the player
+leaves, it only stops pushing to them, so they stay connected and never fire again.
+
+In practice that's fine. Ledger drops the session when the player leaves, and if you didn't keep the
+connection anywhere it gets collected along with it.
+
+If you did store connections somewhere long lived, disconnect them yourself:
+
+```luau
+local Connections: { [Player]: any } = {}
+
+Players.PlayerAdded:Connect(function(Player)
+	Store:Load(Player)
+	Connections[Player] = Store:Expect(Player):Observe():Subscribe(function(State)
+		UpdateHud(Player, State)
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(Player)
+	local Connection = Connections[Player]
+	if Connection then
+		Connection:Disconnect()
+		Connections[Player] = nil
+	end
+	Store:Unload(Player)
+end)
+```
+
+## Destroy
+
+```luau
+Observer:Destroy() -> ()
+```
+
+Drops every listener and runs the teardown.
+
+<Callout type="warn">
+  Don't call this on `Session:Observe()`. It hands back the session's own stream rather than a copy,
+  so destroying it kills change notifications for everything else watching that player. Destroy your
+  own chains if you want, never the source.
+</Callout>

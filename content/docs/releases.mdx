@@ -1,0 +1,66 @@
+---
+title: Releases
+description: What changed, and what you have to change with it.
+---
+
+`+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
+
+## 3.1.0
+
+Every method that could fail now says why. Before this, a read that failed handed you back nothing
+at all, which arrived in your variable as `nil` and looked exactly like a player with no data.
+
+```diff
++ Every read says why it failed, the same way every write already did
++ Behind, a ninth reason, for a record a newer build wrote
++ Erase, RecoverTransfers and ClearDelivered say whether they ran
+
+- Reads that failed by handing back nothing, with no way to ask what went wrong
+- A datastore blip and a record this server must not touch looking the same
+- A failed DidApply reading as never granted, so a support tool pays twice
+
+! Reads answer (value?, Reason?), and nil always means the read failed
+! Store:DidApply can be nil, so compare it against true rather than truthiness
+! Reset on a record from a newer build says Behind, it used to say Refused
+! Writes dropped by the shutdown say Closed, they used to say Unresolved
+```
+
+### Upgrading
+
+Most code keeps working. A missing first return was already `nil`, so `if Ok then` and
+`if State == nil then` behaved the same before and after. What changes is that you can now tell the
+failures apart, and strict mode will point at the call sites worth revisiting.
+
+The one that can cost you money is `DidApply`:
+
+```luau
+-- before, and now wrong: a failed read reads as never granted, so you grant again
+if Store:DidApply(UserId, Name):Wait() then
+
+-- now
+if Store:DidApply(UserId, Name):Wait() == true then
+```
+
+And if you match on reasons to decide whether to retry, add `Behind` to the "don't bother" side. It
+means this server is running an older build than the one that wrote the record, so retrying can't
+help and writing a fresh profile over the top would destroy real data. See
+[Reasons](/docs/concepts/reasons).
+
+## 3.0.1
+
+```diff
++ Edit and Reset prove their answer against a pending transaction instead of guessing
++ Markers on keys holding a delimiter byte reap like any other
++ OnceAt joins Id and Kind as reserved, overwritten with a warning
++ Warnings rewritten in plain speech, what happened and what to do about it
+
+- A marker naming a key with \0 or \1 in it could never be collected by anyone
+- A forged OnceAt could wipe the applied id set and pay a delivered transfer twice
+- Edit answering true for a verdict a pending leg was about to overturn
+- Reserve reporting money set aside without saying on what terms
+- Loading and Leaving as two maps that could disagree about one player
+
+! Edit and Reset answer Unresolved when a stuck leg could still flip the verdict
+! OnceAt in Fields is overwritten now, CommitOp still honours an op's own stamp
+! Mid deploy, a transaction retried across versions can answer Spent once, nothing applies
+```

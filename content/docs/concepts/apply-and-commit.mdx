@@ -1,0 +1,84 @@
+---
+title: Apply and Commit
+description: One is instant and local, the other is durable before it answers.
+---
+
+Both of them write an op. The difference is when you find out it stuck.
+
+| | `Apply` | `Commit` |
+| --- | --- | --- |
+| Gives you | `(boolean, Reason?)` | `Future<boolean, Reason?>` |
+| Yields | no | yes, on `:Wait()` |
+| Durable when it answers | no | yes |
+| Costs a datastore request | no | yes |
+| Sees other servers' writes | no | yes |
+
+## Apply
+
+`Apply` runs your reducer against live state, updates it, tells observers, and queues the op. It
+never touches the datastore. The op goes out on the next autosave, which runs every 30 seconds, or
+on the next `Flush`, `Commit` or `Unload`.
+
+```luau
+local Ok, Why = Session:Apply("SpendGold", { Amount = 25 })
+```
+
+Use it for whatever the player is doing right now. Spending, picking things up, progression, stats.
+This is the one to reach for by default.
+
+What it costs you is that the answer is local. It knows what this server has, not what some other
+server appended a second ago. If the player is only writing from one server, which is the normal
+case, that's fine.
+
+## Commit
+
+`Commit` pushes everything queued, appends the op, waits for the datastore to take it, refolds from
+what came back, and only then answers.
+
+```luau
+local Ok, Why = Session:Commit("GrantReward", { Item = "Sword" }):Wait()
+if Ok then
+	GiveTheSword()
+end
+```
+
+Use it when you're about to do something you can't take back. Handing out a purchase, calling a
+webhook, telling another service the thing happened. `true` means the op is in the log, your reducer
+took it, and every server will agree from here on.
+
+Since the fold runs against the real record, `Commit` sees other servers' writes. It's also where a
+stuck [transaction](/docs/guides/transactions) leg on the key can make the answer provisional, and
+in that case you get [`Unresolved`](/docs/concepts/reasons) instead of a guess.
+
+## CommitOp
+
+`CommitOp` takes an op table you built yourself, so you can put a `Once` name on it or reuse an id
+across a retry:
+
+```luau
+local Ok, Why = Session:CommitOp({
+	Id = HttpService:GenerateGUID(false),
+	Kind = "GrantReward",
+	Item = "Sword",
+	Once = `order:{OrderId}`,
+}):Wait()
+```
+
+`Id` and `Kind` are required. `Once` is optional, and it's what makes the op apply at most one time
+on that key, forever. See [Once](/docs/concepts/once).
+
+## Which one
+
+Apply for gameplay, Commit for side effects.
+
+If the player wouldn't notice a rollback, `Apply`. If someone would file a ticket about it,
+`Commit`.
+
+## Flush
+
+`Session:Flush()` pushes queued ops without adding one. It's what autosave calls. You rarely need it
+yourself, but it's there for the moment before you do something risky:
+
+```luau
+Session:Flush():Wait()
+```

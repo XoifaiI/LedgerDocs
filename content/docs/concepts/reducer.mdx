@@ -1,0 +1,208 @@
+---
+title: Writing a reducer
+description: The one function you own, and the rules it has to keep.
+---
+
+```luau
+type Reducer<S> = (State: S, Op: Op) -> S?
+```
+
+The reducer takes the state and one op, and gives back the next state or `nil` to refuse. It's the
+only place in your game that decides whether a change is allowed.
+
+```luau
+local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+	if Op.Kind == "SpendGold" then
+		if type(Op.Amount) ~= "number" or Op.Amount <= 0 then
+			return nil
+		end
+		if Op.Amount > State.Gold then
+			return nil
+		end
+
+		local Next = table.clone(State)
+		Next.Gold -= Op.Amount
+		return Next
+	end
+
+	return nil
+end
+```
+
+## It has to be pure
+
+The same `(State, Op)` has to give the same answer on every server, forever. No `os.time()`, no
+`math.random()`, no `game`, no upvalues that move, no reading someone else's data. If you need the
+time or a dice roll, work it out at the call site and put it on the op:
+
+```luau
+Session:Apply("DailyBonus", { At = os.time(), Roll = math.random(1, 6) })
+```
+
+A log gets folded on two servers at two different moments. If the reducer reads the clock, those two
+folds disagree and your data quietly splits in half.
+
+<Callout type="warn">
+  In Studio, Ledger refolds the log after every commit and compares it against live state. If they
+  don't match it warns and names the field that moved. That check doesn't run in production, so
+  fix what it points at rather than shipping around it.
+</Callout>
+
+## It has to not mutate
+
+Return a new table. `table.clone` is shallow, so clone each nested table you touch:
+
+```luau
+local Next = table.clone(State)
+Next.Gamepasses = table.clone(State.Gamepasses)
+Next.Gamepasses[Pass] = true
+return Next
+```
+
+The state you get handed is deep frozen, so a mutation throws on the line that did it instead of
+corrupting a fold somewhere later.
+
+## It has to not yield
+
+No `task.wait`, no `:Wait()`, no yielding datastore calls. Ledger runs the reducer inside a guard
+that errors if it yields.
+
+## It has to return a table or nil
+
+Anything else is a bug. Ledger refuses the op with [`Invalid`](/docs/concepts/reasons) and warns.
+
+## Leave the reserved fields alone
+
+`table.clone(State)` carries `_Received` and `_Held` across for free, so most reducers never think
+about them.
+
+If you build the next state from scratch and drop them, Ledger puts them back rather than letting
+you lose the applied id set. What it won't always catch is you writing your own values into them. On
+a store with a `Balance` those get overwritten, but on a store without one a hand built `_Received`
+survives, and that's how you'd break the dedupe.
+
+So don't drop them, and don't write to them. Read them if you want, they're just data.
+
+## Ops you don't know
+
+Return `nil` for anything you don't recognise. That isn't an error, it's a refusal, and it's what
+makes a rolling deploy safe. An old server that's never heard of `NewFeatureOp` refuses it instead
+of guessing at it.
+
+## Check the fields
+
+Ops come from your own code, but they also come back out of a datastore that's been holding them for
+weeks, possibly written by a version of your game that doesn't exist anymore. Check the types on the
+way in. A reducer that does `State.Gold -= Op.Amount` without checking `Op.Amount` is a number will
+happily hand you `nil` gold and take the profile with it.
+
+## Coming from Rodux or Redux
+
+The shape is close enough that people reach for it straight away. An op is an action, `Op.Kind` is
+`action.type`, and a handler table keyed by kind reads a lot nicer than a long `if` chain.
+
+That part is fine. Two of the conventions are backwards here though, and both of them cost you money
+rather than throwing.
+
+### nil means refused, not unhandled
+
+In Redux the default case returns the state unchanged, and returning nothing is an error. Here it's
+the other way round. Ledger reads any table you return as accepted, including the exact state you
+were handed. Returning `nil` is the only way to refuse.
+
+So a Redux style default case accepts every op you never wrote a handler for:
+
+```luau
+-- wrong here, right in Redux
+local function Reducer(State, Op)
+	local Handler = Handlers[Op.Kind]
+	if Handler == nil then
+		return State  -- Ledger reads this as "yes, applied"
+	end
+	return Handler(State, Op)
+end
+```
+
+That isn't a harmless no-op. An op carrying a [`Once`](/docs/concepts/once) name gets that name
+written into the applied set the moment your reducer hands back a table, so the receipt is marked
+granted while nothing was granted. `DidApply` says true, the retry never comes, and the player is
+out the Robux. A transaction leg does the same thing and commits on a key that did nothing.
+
+The fix is one word:
+
+```luau
+local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+	local Handler = Handlers[Op.Kind]
+	if Handler == nil then
+		return nil  -- refused
+	end
+	return Handler(State, Op)
+end
+```
+
+Every handler in the table returns `nil` to refuse too, same as it would inline.
+
+### combineReducers doesn't survive the trip
+
+`combineReducers` builds a fresh table out of every slice on every action. It therefore always
+returns a table, which here means it always accepts. A slice that wanted to refuse has no way to say
+so, because the combined result is a table either way.
+
+It's worse than losing the refusal. In Lua, a slice returning `nil` assigns `nil` into the combined
+table, which deletes that key. So the refusal doesn't just get swallowed, it takes the field with
+it.
+
+Route by kind instead and let `nil` come straight back up:
+
+```luau
+local Slices = {
+	SpendGold = function(State, Op)
+		if Op.Amount > State.Gold then
+			return nil
+		end
+		local Next = table.clone(State)
+		Next.Gold -= Op.Amount
+		return Next
+	end,
+
+	UnlockGamepass = function(State, Op)
+		if State.Gamepasses[Op.Pass] then
+			return nil
+		end
+		local Next = table.clone(State)
+		Next.Gamepasses = table.clone(State.Gamepasses)
+		Next.Gamepasses[Op.Pass] = true
+		return Next
+	end,
+}
+
+local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+	local Slice = Slices[Op.Kind]
+	return if Slice then Slice(State, Op) else nil
+end
+```
+
+Each handler still owns one field, which is what you wanted `combineReducers` for. It just returns
+the whole state rather than a slice of it, so a refusal is still a refusal.
+
+### The rest of Rodux doesn't come with it
+
+Don't build a `Rodux.Store`. Ledger is the store, state lives in the log, and `Session:Observe()` is
+your subscribe. Two stores holding the same data is how they drift apart.
+
+No middleware and no thunks. The reducer can't yield, so anything async happens before you call
+`Apply` or `Commit`, and the result rides in on the op.
+
+No Immer style drafts either. State is deep frozen, so mutating it throws on the line that did it.
+Clone what you touch.
+
+One convention does carry over cleanly. Redux asks you to keep actions serializable by convention.
+Ledger enforces it, because ops go in a datastore, and an op that isn't JSON is refused with
+[`Invalid`](/docs/concepts/reasons) instead of failing at save time.
+
+## Balance and transactions
+
+If the store names a `Balance` field, Ledger wraps your reducer with the transfer ops
+(`__TransferReserve`, `__TransferDeliver` and the rest) before it ever reaches you. You never handle
+those kinds and you'll never see them in your `if` chain. Same goes for transaction bookkeeping and
+`Store:Reset`.

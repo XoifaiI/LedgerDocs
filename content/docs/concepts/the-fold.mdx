@@ -1,0 +1,68 @@
+---
+title: The fold
+description: State is a pure fold over an append only log of ops.
+---
+
+Every key Ledger owns holds a record, not a state table. A record is a snapshot plus the ops that
+have been appended since that snapshot was taken.
+
+```luau
+State = fold(Snapshot, Ops)
+```
+
+Reading a key means loading the record and replaying its ops through your reducer. Writing a key
+means appending one op. Nothing ever overwrites state.
+
+## Why that gets rid of the lock
+
+Two servers appending to the same key isn't a conflict, because appends commute. Both ops end up in
+the log. Whatever order they land in, every server that folds that log later walks the ops in the
+same order and gets the same state.
+
+That's what stands in for the session lock. A lock stops the second writer. A fold lets both of them
+write and then decides, and it decides the same way everywhere.
+
+<Callout type="info">
+  The datastore settles the order once, at the moment of the append. It isn't decided per server and
+  it doesn't depend on anyone's clock.
+</Callout>
+
+## Refusing is part of it
+
+Your reducer returns `nil` to refuse an op. The op is still in the log, it just doesn't contribute
+anything. So when two servers both try to spend the same last 100 gold:
+
+1. Server A appends `SpendGold{100}`, server B appends `SpendGold{100}`.
+2. The log holds both of them, in whatever order the datastore settled on.
+3. Every fold applies the first and refuses the second, because by then the balance is 0.
+
+Both servers see the same thing. The player spent 100 gold once.
+
+## Compaction
+
+A log that only ever grows would eventually hit the 4 MB value limit. Once a log gets long or heavy,
+Ledger folds it down into a fresh snapshot and drops the ops it just absorbed. Autosave does this on
+its own, and `Session:Compact()` forces it.
+
+Your reducer never sees any of that. The one thing compaction can't lose is the set of op ids that
+have already been applied, otherwise a retry after a compaction would apply twice. Ledger keeps that
+set inside the state itself, under `_Received`.
+
+## Reserved fields
+
+Ledger keeps its own bookkeeping in the state table, under keys starting with an underscore.
+
+`_Received` holds applied op ids, namespaced so a transfer, a transaction and a
+[Once](/docs/concepts/once) name can't collide. `_Held` holds money set aside by a
+[transfer](/docs/guides/transfers) that hasn't finished yet.
+
+`Ledger.New` throws if your `Default` declares any key starting with `_`. Your reducer will see both
+fields on `State`, and `table.clone` carries them across without you doing anything. Drop them by
+accident and Ledger puts them back. Write your own values into them and you're on your own.
+
+## What you can store
+
+Whatever a datastore can hold, so JSON. Tables, strings, numbers, booleans. No Instances, no
+Vector3, no functions, no cyclic tables, no tables that mix array and dictionary keys, no NaN or
+inf. Ledger checks this on the way in and refuses the op with
+[`Invalid`](/docs/concepts/reasons) instead of letting the save fail later.

@@ -1,0 +1,96 @@
+---
+title: Migrations
+description: Changing the shape of your data while old servers are still running.
+---
+
+A migration is a function that takes the old state and gives back the new one. You add them to the
+end of the list and never touch the ones already there.
+
+```luau
+local Store = Ledger.New({
+	Name = "PlayerData",
+	Default = { Gold = 100, Items = {}, Pets = {} },
+	Reducer = Reducer,
+	Migrations = {
+		-- 1: Coins became Gold
+		function(State)
+			local Next = table.clone(State)
+			Next.Gold = State.Coins or 0
+			Next.Coins = nil
+			return Next
+		end,
+
+		-- 2: pets, which is additive
+		{
+			Compatible = true,
+			Apply = function(State)
+				local Next = table.clone(State)
+				Next.Pets = {}
+				return Next
+			end,
+		},
+	},
+})
+```
+
+The number of migrations in the list is the version. A record remembers which version it was written
+at, and when a server loads one that's behind, it runs the missing steps in order before folding.
+
+Migrations only run on the snapshot, at load. They never see ops.
+
+## New fields don't need one
+
+Ledger reconciles the folded state against `Default` on every load, so a field you add to `Default`
+shows up on old profiles with its default value automatically. You only need a migration when you're
+changing something that's already there, like renaming a field or reshaping it.
+
+## Rolling deploys
+
+This is the part that actually needs thinking about. During a deploy you have old servers and new
+servers running at the same time, on the same data.
+
+New servers write records stamped with the new version. An old server that reads one and doesn't
+recognise the version refuses to fold it, and errors instead. That's on purpose. The alternative is
+an old server quietly folding a record it doesn't understand and writing back a version of the
+profile with the new fields stripped out.
+
+`Compatible = true` is how you say a step is safe for that. It means the migration only adds things,
+so an old server can read the record, ignore what it doesn't know, and write back without losing
+anything.
+
+Ledger keeps track of the last step that wasn't compatible. Any record at or above that point can be
+read by an older server. Anything below it can't, and the old server answers
+[`Behind`](/docs/concepts/reasons) instead of guessing.
+
+`Behind` is the one reason it's pointless to retry, because it isn't about the datastore. It says
+this server is running an older build than the one that wrote the record, and it clears when the
+deploy finishes. Never fall back to a fresh profile on `Behind`, the stored data is fine and writing
+over it is how you lose it.
+
+So:
+
+Adding a field, adding a table, adding a default. Mark it `Compatible = true` and old servers keep
+working straight through the deploy.
+
+Renaming, deleting, or reshaping a field. Leave it plain. Old servers will refuse those records,
+which is what you want, and the errors stop as soon as the deploy finishes.
+
+## Don't drop something Default still declares
+
+If a migration removes a field but `Default` still lists it, the reconcile puts it straight back on
+every load and your migration does nothing. Ledger checks for this at `Ledger.New` and warns with
+the field name.
+
+Take it out of `Default` at the same time you write the migration to remove it.
+
+## Rules
+
+Migrations have to be pure and can't yield, same as the reducer.
+
+They have to return a table. Returning anything else errors on load with the step number.
+
+Never reorder them, never delete one, never edit one that's already shipped. The list index is the
+version, so changing it changes what every existing record means.
+
+Version numbers only go up. A record written at a version newer than this server knows is either
+read through the compatible path or refused, never folded down.

@@ -1,0 +1,124 @@
+---
+title: Reasons
+description: The nine answers Ledger gives when something doesn't go through.
+---
+
+Anything that can fail tells you why. Writes answer `(boolean, Reason?)` and reads answer
+`(value?, Reason?)`, and there are only nine reasons. They live on `Ledger.Reason`, so you can
+compare against the constant instead of a string literal.
+
+```luau
+local Ok, Why = Session:Commit("SpendGold", { Amount = 25 }):Wait()
+if not Ok and Why == Ledger.Reason.Refused then
+	Tell(Player, "you can't afford that")
+end
+```
+
+## Refused
+
+Your reducer returned `nil`. The op was legal to write, it just wasn't allowed to happen, so the
+player couldn't afford it, or already owns it, or whatever your rule was. This is the only reason
+that came from your own code, and it's the only one that's a normal part of gameplay.
+
+Nothing changed. Don't retry it, the answer won't be different.
+
+## Busy
+
+Someone else is in the middle of a transaction on that key and it hasn't finished yet. Ledger has
+already scheduled a background pass to clean it up.
+
+Nothing changed. Retrying in a few seconds is reasonable.
+
+## Spent
+
+The id you used has already been used. A transfer with that id already moved, or a transaction with
+that id already ran. This is the dedupe doing its job, and it usually means your retry worked the
+first time and you didn't hear back.
+
+Nothing changed on this call, but the thing you asked for probably already happened. Treat it as
+success, not failure.
+
+## Unresolved
+
+Ledger doesn't know. Either the datastore call failed in a way where the write might still have gone
+through, or a stuck transaction leg means the fold could still flip once it clears.
+
+This is the important one. It doesn't mean no, it means don't know, so never treat it as a refusal.
+For a purchase, answer `NotProcessedYet` and let the retry ask again later. For anything with a
+`Once` name, `DidApply` will tell you what actually happened once things settle.
+
+## Closed
+
+The session is gone. The player left and it was released, or the store was destroyed. Anything you
+write to it now goes nowhere.
+
+## Backlog
+
+Ops are piling up because saves aren't going through. Either 4096 ops are queued or they've hit the
+1.5 MB cap on unsaved bytes. This basically only happens when the datastore is down.
+
+Nothing changed. This is a signal to stop writing and look at what's wrong, not to retry harder.
+
+## Full
+
+The profile is at the 2 MB cap and the op would make it bigger. Ledger lets ops through that shrink
+it, so a cleanup still works.
+
+Nothing changed. You need to remove something before you can add anything.
+
+## Invalid
+
+The op can't be stored. Something in the fields isn't JSON, so an Instance, a function, a cyclic
+table, a table mixing array and dictionary keys, NaN, inf. Or your reducer handed back something
+that wasn't a table.
+
+Nothing changed. This is a bug in the calling code, and Ledger warns with the specific field.
+
+## Behind
+
+A newer server wrote that record and this one can't read it. Either the stored format is newer than
+this server's build, or the record needs a migration this build doesn't have.
+
+Nothing changed, and this is the one reason where retrying is pointless. It isn't a hiccup, it's a
+statement about which version of your game this server is running. It clears when the deploy
+finishes and every server is on the same build.
+
+You'll only see it during a rolling deploy, and only on records a newer server already touched. If
+you see it after a deploy has finished, someone is running an old build.
+
+<Callout type="warn">
+  Never treat `Behind` as "this player has no data". The record is fine. This server is the problem,
+  and writing a fresh profile over the top would destroy it.
+</Callout>
+
+## Handling them
+
+Most code only cares about two things: did it work, and can I retry.
+
+```luau
+local Ok, Why = Store:Edit(UserId, "GrantItem", { Item = "Sword" }):Wait()
+
+if Ok then
+	-- it went through
+elseif Why == Ledger.Reason.Spent then
+	-- it already went through on an earlier try
+elseif Why == Ledger.Reason.Unresolved or Why == Ledger.Reason.Busy then
+	-- no answer yet, ask again later
+else
+	-- Refused, Closed, Backlog, Full, Invalid, Behind:
+	-- it didn't happen and asking again won't help
+end
+```
+
+Reads answer the same way, with the value in front:
+
+```luau
+local State, Why = Store:Peek(UserId):Wait()
+if State == nil then
+	-- Why says which of the failures it was
+	return
+end
+```
+
+A key nobody has ever written folds to your `Default`, so a read never gives you `nil` on success.
+`nil` always means it failed.

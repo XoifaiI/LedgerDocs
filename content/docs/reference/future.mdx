@@ -1,0 +1,137 @@
+---
+title: Future
+description: What every method that yields hands you back.
+---
+
+Anything in Ledger that touches the datastore gives you a `Future` rather than yielding on the spot.
+
+```luau
+local Job = Store:Peek(UserId)   -- already running
+local State = Job:Wait()         -- yields here
+```
+
+The important part is that the work starts when you call the method, not when you call `Wait`. The
+callback is spawned straight away on its own thread. `Wait` only parks your thread until it's done.
+
+## Running two at once
+
+Because they're eager, starting several and waiting afterwards runs them together:
+
+```luau
+local A = Store:Peek(FirstUserId)
+local B = Store:Peek(SecondUserId)
+
+print(A:Wait().Gold + B:Wait().Gold)
+```
+
+Both reads are in flight while you sit on the first `Wait`. Writing it as
+`Store:Peek(First):Wait() + Store:Peek(Second):Wait()` costs you two round trips instead of one.
+
+## Wait
+
+```luau
+Job:Wait(Timeout: number?) -> T...
+```
+
+Yields until the callback finishes and gives you whatever it returned. If it's already finished,
+`Wait` returns immediately without yielding at all, so don't lean on it as a way to give up a frame.
+
+Waiting more than once is fine, and so is waiting from several threads.
+
+<Callout type="warn">
+  `Wait` returns **nothing** if the callback errored or the timeout ran out. Not `false`, not `nil`
+  as a deliberate answer, just no values at all, which lands in your locals as `nil`.
+</Callout>
+
+Every Ledger method answers with a [reason](/docs/concepts/reasons) rather than throwing, so in
+normal use you don't hit this. A failed `Peek` gives you `(nil, Unresolved)`, not nothing at all:
+
+```luau
+local State, Why = Store:Peek(UserId):Wait()
+if State == nil then
+	warn(`could not read that profile: {Why}`)
+	return
+end
+```
+
+Where it still bites is a timeout, and any Future you build yourself. In both cases the missing
+first return is `nil`, which is falsy, so `if Ok then` and `if State == nil then` both still do the
+right thing. What you lose is `Why`, which comes back `nil` as well, so you can't tell a refusal
+from a timeout that way. Use `Happened` when you need to.
+
+## Timeout
+
+```luau
+local Ok, Why = Store:Edit(UserId, "GrantItem", { Item = "Sword" }):Wait(10)
+```
+
+After 10 seconds your thread resumes with no values. The work carries on in the background, it isn't
+cancelled, and if it finishes later the result is still there for a second `Wait`.
+
+## Happened
+
+```luau
+Job:Happened(Wait: boolean?) -> boolean
+```
+
+Whether the callback ran to completion without erroring.
+
+Called while the job is still going it gives you `false` straight away rather than waiting. So the
+plain form is for after you already waited:
+
+```luau
+local Job = Store:Peek(UserId)
+local State = Job:Wait()
+
+if not Job:Happened() then
+	warn("that read failed")
+end
+```
+
+Pass `true` and it waits for the answer first. That's the one to use when you only care whether it
+worked and never wanted the value:
+
+```luau
+local Job = Store:ClearDelivered(UserId)
+
+-- ... do other things while it runs ...
+
+if not Job:Happened(true) then
+	warn("that housekeeping pass failed, the next one picks it up")
+end
+```
+
+`Happened(true)` yields exactly like `Wait` does, so don't reach for it somewhere that can't yield.
+
+This is the only way to tell an empty result apart from a failure.
+
+<Callout type="warn">
+  `Happened` answers whether the callback ran, not whether what you asked for worked. A refused
+  `Edit` gives you a future that ran perfectly well and answered `(false, Refused)`, so
+  `Happened()` is `true`. Read the boolean for the outcome, `Happened` for whether there is an
+  outcome at all.
+</Callout>
+
+It has one rough edge worth knowing. A job that's still running and a job that failed both report
+`false`, so straight after a `Wait` that timed out you get `false` from a job that's doing fine and
+will finish a moment later. If you used a timeout, `Happened(true)` is the one that gives you a real
+answer, since it waits for the job rather than judging it mid flight.
+
+## Errors don't propagate
+
+A callback that throws is caught. Ledger warns with `Future callback errored:` and the message, the
+future settles as not happened, and `Wait` gives you nothing. It will not rethrow into your thread,
+so a `pcall` around `:Wait()` catches nothing useful.
+
+If you want a failed read to throw in your own code, check `Happened` and raise it yourself.
+
+## Fire and forget
+
+You don't have to wait at all. The work still runs.
+
+```luau
+Store:ClearDelivered(UserId)  -- no :Wait(), still happens
+```
+
+Reasonable for maintenance calls. Not reasonable for anything you're about to act on, since you have
+no idea whether it worked.

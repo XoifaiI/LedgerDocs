@@ -1,0 +1,95 @@
+---
+title: Entity stores
+description: String keys for clans, listings and anything else no single server owns.
+---
+
+A store with `Keys = "String"` isn't about players. The keys are names you pick, and the data
+underneath belongs to nobody in particular.
+
+```luau
+local Clans = Ledger.New({
+	Name = "Clans",
+	Keys = "String",
+	Default = { Members = {}, Treasury = 0, Level = 1 },
+	Balance = "Treasury",
+	Reducer = function(State, Op)
+		if Op.Kind == "Join" then
+			if State.Members[Op.UserId] then
+				return nil
+			end
+			if #State.Members >= 50 then
+				return nil
+			end
+
+			local Next = table.clone(State)
+			Next.Members = table.clone(State.Members)
+			Next.Members[Op.UserId] = true
+			return Next
+		end
+
+		return nil
+	end,
+})
+```
+
+This is where not having a lock matters most. Twenty servers can be writing to the same clan at the
+same time, and the fold decides the membership cap the same way on all of them. There's no owner
+server, no lease, and nothing to recover if a server dies mid write.
+
+## Working with them
+
+There are no sessions, because nobody is logged in to a clan. You write with `Edit` and read with
+`Peek`:
+
+```luau
+local Ok, Why = Clans:Edit("cool-guys", "Join", { UserId = Player.UserId }):Wait()
+if not Ok and Why == Ledger.Reason.Refused then
+	Tell(Player, "that clan is full")
+end
+
+local State, Why = Clans:Peek("cool-guys"):Wait()
+if State == nil then
+	warn(`could not read that clan: {Why}`)
+	return
+end
+print(State.Level)
+```
+
+A clan nobody has created yet folds to your `Default`, so `nil` there always means the read itself
+failed rather than the clan being missing.
+
+Every method that takes a `Key` works. `Transfer`, `Tx`, `DidApply`, `History`, `PeekVersion`,
+`Reset` and `Erase` all behave the same way they do on a player store.
+
+The session methods don't. `Load`, `Unload`, `Get`, `Expect`, `IsLoaded`, `WaitForLoaded` and `Read`
+all throw on a string keyed store, because there's no player to hang a session on.
+
+## Keys
+
+A key is a string of 1 to 50 characters and it has to be valid UTF-8. Roblox sets that limit, so
+Ledger can't raise it.
+
+Pick keys that come from something stable. A clan id, a listing id, a slug. Don't build them out of
+anything that might change, because there's no rename.
+
+## Caching
+
+`Peek` reads the record every time you call it. There's no cache, because with twenty servers
+writing to the key a cached copy would be out of date almost immediately. It does mean you shouldn't
+call it in a loop or per frame.
+
+Read it once, hold onto it, and read again after you write.
+
+## Mixing them
+
+A transaction can touch a player store and an entity store in the same commit, which is the usual
+reason to have both:
+
+```luau
+Players:Tx(`donate:{OrderId}`, {
+	{ UserId = Player.UserId, Kind = "SpendGold", Fields = { Amount = 500 } },
+	{ Store = Clans, Key = "cool-guys", Kind = "Donate", Fields = { Amount = 500 } },
+}):Wait()
+```
+
+Both sides move or neither does. See [Transactions](/docs/guides/transactions).

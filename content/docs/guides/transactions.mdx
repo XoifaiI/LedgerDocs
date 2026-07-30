@@ -1,0 +1,108 @@
+---
+title: Transactions
+description: Two to four keys that all change together, or none of them do.
+---
+
+`Tx` writes to several keys at once and guarantees all of them took it or none of them did. The keys
+can be in two different stores, and none of them have to be online.
+
+```luau
+local Ok, Why = Store:Tx(`trade:{TradeId}`, {
+	{ UserId = Seller, Kind = "GiveItem",  Fields = { Item = "Sword" } },
+	{ UserId = Buyer,  Kind = "SpendGold", Fields = { Amount = 500 } },
+}):Wait()
+```
+
+If the buyer can't afford it, the seller doesn't lose the sword. If the seller doesn't have the
+sword, the buyer doesn't lose the gold. There's no window where one of those is true and the other
+isn't.
+
+## The id
+
+The id comes first and it's required. It has to be a stable name derived from the thing you're
+settling, so a trade id, an order id, a match id. Never build it from the clock or a fresh GUID.
+
+That's what makes a retry safe. Running the same transaction id again doesn't do it twice, you get
+`Spent` back instead, which means it already ran. Treat that as success.
+
+Ids are 1 to 50 characters.
+
+## The legs
+
+Between two and four legs. Each one names a key and an op.
+
+```luau
+{
+	Store = Clans,          -- optional, defaults to the store you called Tx on
+	UserId = 12345,         -- for a player store
+	Key = "cool-guys",      -- for a string keyed store
+	Kind = "Donate",
+	Fields = { Amount = 500 },
+}
+```
+
+Use `UserId` when the target store uses player keys and `Key` when it uses string keys. Ledger
+checks which one the target store wants and throws if you gave it the wrong one.
+
+A transaction can only touch a key once, so two legs pointing at the same key is an error rather
+than something it tries to merge.
+
+Don't put `Once` on a leg. The transaction id already makes every leg land at most one time, and
+Ledger throws if it sees one.
+
+## How it decides
+
+Each leg gets prepared on its key first. A prepared op is written into the log but carries a stamp
+that makes the fold skip it, so it's sitting there doing nothing.
+
+Once every leg is prepared, Ledger writes the outcome to a marker key. That single write is the
+moment the transaction commits, and there's exactly one of them, so two servers racing the same
+transaction can't disagree about what happened.
+
+Committing takes the stamps off, which is what makes the ops start counting. Aborting removes them.
+
+If any leg's reducer refuses during prepare, the whole thing aborts and every other leg gets its op
+pulled back out.
+
+## Stuck legs
+
+If the server dies between preparing a leg and writing the outcome, that leg sits there stamped.
+Anything that reads the key sees a pending leg, so it can't just pretend it isn't there.
+
+A few things clear it. Any read or write on that key tries to settle it first. The background
+sweeper picks up keys it knows have pending legs. And a transaction that's older than a minute is
+considered dead, so another server will abort it on its behalf.
+
+While it's stuck, writes to that key answer [`Busy`](/docs/concepts/reasons), and `Edit` or `Reset`
+can answer `Unresolved` when the stuck leg would change the verdict. Neither means it failed. Both
+mean ask again in a moment.
+
+You can force a pass with `Ledger.Sweep()`.
+
+## Marker cleanup
+
+Committed markers get tidied up in the background once they're old enough that nothing could still
+be asking about them. That happens on the store named `<YourStore>_Tx`, which Ledger creates
+alongside yours.
+
+That's also why store names cap at 47 characters instead of the datastore's 50. Ledger needs the
+three for `_Tx`.
+
+## Mixing stores
+
+```luau
+local Ok, Why = Players:Tx(`donate:{OrderId}`, {
+	{ UserId = Player.UserId, Kind = "SpendGold", Fields = { Amount = 500 } },
+	{ Store = Clans, Key = "cool-guys", Kind = "Donate", Fields = { Amount = 500 } },
+}):Wait()
+```
+
+Both stores have to have been built by `Ledger.New` in this server. A leg naming something else
+throws.
+
+## When not to reach for it
+
+If you're moving one balance one direction, use a [transfer](/docs/guides/transfers). It's one
+protocol instead of two phases, it self heals, and it doesn't leave a key `Busy` while it runs.
+
+`Tx` is for when two different kinds of change have to happen together.

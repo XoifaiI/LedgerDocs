@@ -1,0 +1,202 @@
+---
+title: Store
+description: Everything on the object Ledger.New gives you back.
+---
+
+A store owns one datastore name, every key under it, and every session live on this server.
+
+Methods marked player only throw on a store with `Keys = "String"`.
+
+## Sessions
+
+### Load
+
+```luau
+Store:Load(Player: Player) -> ()
+```
+
+Player only. Yields while it reads and folds the record, then starts a 30 second autosave. Kicks the
+player if the load fails.
+
+Calling it twice for the same player warns and does nothing. If they leave mid load, the session is
+released instead of being left around.
+
+### Unload
+
+```luau
+Store:Unload(Player: Player) -> ()
+```
+
+Player only. Cancels the autosave, pushes queued ops, yields until they're durable.
+
+### Get
+
+```luau
+Store:Get(Player: Player) -> Session<D>?
+```
+
+Player only. The session, or `nil` if they aren't loaded.
+
+### Expect
+
+```luau
+Store:Expect(Player: Player) -> Session<D>
+```
+
+Player only. The session, or throws. For code that already knows they're loaded.
+
+### IsLoaded
+
+```luau
+Store:IsLoaded(Player: Player) -> boolean
+```
+
+Player only.
+
+### WaitForLoaded
+
+```luau
+Store:WaitForLoaded(Player: Player) -> Session<D>?
+```
+
+Player only. Yields until the session exists. Gives `nil` if the player left first. This is the one
+for `ProcessReceipt`.
+
+### Read
+
+```luau
+Store:Read(Player: Player) -> D?
+```
+
+Player only. The state table, or `nil`. Shorthand for `Get` then `Get()`.
+
+## Reading any key
+
+### Peek
+
+```luau
+Store:Peek(Key: KeyLike) -> Future<D?, Reason?>
+```
+
+Reads the record and folds it. Works on anyone, online here, elsewhere, or offline. No cache, so it
+costs a request every time.
+
+A key nobody has written folds to your `Default`, so `nil` always means the read failed and the
+reason says why. `Behind` means a newer server wrote it, anything else is worth another go.
+
+### DidApply
+
+```luau
+Store:DidApply(Key: KeyLike, Id: string) -> Future<boolean?, Reason?>
+```
+
+Whether a [`Once`](/docs/concepts/once) name ever applied on that key.
+
+`nil` means it could not read the record, which is not the same as `false`. Compare against `true`
+rather than trusting truthiness, or a failed read reads as "never granted" and you grant twice.
+
+### History
+
+```luau
+Store:History(Key: KeyLike, Limit: number?) -> Future<{ HistoryEntry }?, Reason?>
+```
+
+Up to 30 days of versions, newest first. `Limit` is clamped to 1 through 100 and defaults to 25.
+`nil` means the listing failed.
+
+### PeekVersion
+
+```luau
+Store:PeekVersion(Key: KeyLike, Version: string) -> Future<D?, Reason?>
+```
+
+Folds an old version. Read only, there's no restore. See [Recovery](/docs/guides/recovery).
+
+## Writing any key
+
+### Edit
+
+```luau
+Store:Edit(Key: KeyLike, Kind: string, Fields: { [any]: any }?) -> Future<boolean, Reason?>
+```
+
+Appends one op to any key and waits for the answer. Works whether or not the target is online.
+
+If the key has a live session on this server, `Edit` still goes through the log, so the session picks
+it up on its next fold.
+
+Can answer `Unresolved` when a stuck transaction leg would change the verdict. An edit that leg can't
+affect answers straight away.
+
+### Transfer
+
+```luau
+Store:Transfer(From: KeyLike, To: KeyLike, Amount: number, Id: string?) -> Future<boolean, Reason?>
+```
+
+Moves `Amount` of the `Balance` field from one key to another. Needs the store to name a `Balance`.
+
+`From` and `To` have to be different. `Amount` has to be positive and finite. `Id` is 1 to 64
+characters when given, and giving one makes a retry safe.
+
+See [Transfers](/docs/guides/transfers).
+
+### Tx
+
+```luau
+Store:Tx(Id: string, Legs: { TxLeg }) -> Future<boolean, Reason?>
+```
+
+Commits 2 to 4 legs all or nothing. `Id` comes first and is required, 1 to 50 characters, and has to
+be stable across retries.
+
+See [Transactions](/docs/guides/transactions).
+
+### Reset
+
+```luau
+Store:Reset(Key: KeyLike) -> Future<boolean, Reason?>
+```
+
+Puts the key back to `Default`, keeping `_Received` and `_Held`. A record written at a version this
+server doesn't know answers [`Behind`](/docs/concepts/reasons) rather than `Refused`, because
+nothing turned the write down, this server just can't read what's there.
+
+### Erase
+
+```luau
+Store:Erase(Key: KeyLike) -> Future<boolean, Reason?>
+```
+
+Deletes the key. Hands over in flight transfer money first. Warns if the player is still in the
+server, because their session will write part of it back.
+
+`false` means the key is still there. Check it before you tell anyone their data is gone.
+
+## Maintenance
+
+### RecoverTransfers
+
+```luau
+Store:RecoverTransfers(Key: KeyLike) -> Future<boolean, Reason?>
+```
+
+Forces stranded transfers on one key to finish or refund. The sweeper already does this, so it's for
+support tools.
+
+### ClearDelivered
+
+```luau
+Store:ClearDelivered(Key: KeyLike) -> Future<boolean, Reason?>
+```
+
+Drops delivered transfer ids older than 30 days from the key. Happens on its own.
+
+### Destroy
+
+```luau
+Store:Destroy() -> ()
+```
+
+Saves every live session, frees the name, and takes the store out of the registry. Every method
+throws afterwards.

@@ -1,0 +1,154 @@
+---
+title: Testing
+description: The mock datastore, the swappable clock, and how Ledger itself is tested.
+---
+
+## The mock
+
+`Ledger.UseMock()` swaps every store onto an in memory datastore. No API access, no published place,
+no network.
+
+```luau
+local Service = Ledger.UseMock({ Players = 30 })
+
+-- build stores and run your game as normal
+
+Ledger.UseReal()
+```
+
+Call it before you build any stores. A store built against the real datastore stays on it.
+
+`Players` is how many players to size the request budget for, since Roblox's budget formula is a
+base plus a per player allowance. Set it to what a real server of yours looks like.
+
+`Throttled` defaults to true and is what makes the mock worth using. With it on you get real request
+budgets, real refill rates, real queueing, and a real throughput cap per key. Turn it off with
+`Throttled = false` when you're testing logic and don't want to wait around.
+
+<Callout type="warn">
+  The mock is stricter than Studio on purpose. Studio hands you request budgets a live server never
+  gets, so code that's fine in Studio can fall over the moment it's on a real server with 40 people
+  in it. If it passes against the mock it'll pass live.
+</Callout>
+
+What the mock keeps from the real thing: the 50 character name and key limits, the 4 MB value limit,
+30 versions of history, JSON only values, and paged listing.
+
+## The clock
+
+`Ledger.UseClock` swaps out the function Ledger reads the time from.
+
+```luau
+local Now = 0
+Ledger.UseClock(function()
+	return Now
+end)
+
+Now += 8 * 86400  -- jump a week forward
+
+Ledger.UseClock(nil)  -- back to os.time
+```
+
+Everything with a deadline reads through this, so you can jump forward and watch the expiry paths
+run instead of waiting a week for them.
+
+## Studio checks
+
+Some checks only run in Studio, because they cost too much to run live.
+
+Ledger refolds the log after every commit and compares it against live state. If they don't match,
+your reducer isn't deterministic, and the warning names the field that moved.
+
+`Ledger.New` also warns when a migration drops a field that `Default` still declares, since the
+reconcile just puts it back and your migration does nothing.
+
+Both of these are bugs to fix. The checks only run in Studio, so on a live server you get no warning
+and the same broken behaviour.
+
+## Writing tests
+
+The pattern that works is: mock on, build the store, drive it, assert on `Peek`.
+
+```luau
+Ledger.UseMock({ Players = 8, Throttled = false })
+
+local Store = Ledger.New({
+	Name = "Test",
+	Default = { Gold = 100 },
+	Reducer = Reducer,
+	Balance = "Gold",
+})
+
+Store:Edit(1, "SpendGold", { Amount = 30 }):Wait()
+assert(Store:Peek(1):Wait().Gold == 70)
+
+Store:Destroy()
+Ledger.UseReal()
+```
+
+`Store:Destroy()` frees the name, so the next test can build a store called `Test` again. Without it
+you'll get a name clash.
+
+Two servers is just two stores over the same mock service, since they're both reading and writing
+the same in memory keys. That's how you test the parts that only go wrong under a race.
+
+## How Ledger itself is tested
+
+Three layers, and they catch different things.
+
+### Deterministic simulation, the TigerBeetle way
+
+The approach is lifted from [TigerBeetle](https://tigerbeetle.com), which runs its whole database
+against a simulated world rather than a real one.
+
+Ledger runs against a simulated datastore that can drop writes, acknowledge writes it actually
+dropped, corrupt records, split servers apart, kill them halfway through a write and move the clock
+around. Everything that could be random reads from one seed, including the scheduler that decides
+which of the eight simulated servers runs next. So a run is a pure function of its seed, and a
+failure replays exactly instead of being something you saw once.
+
+That last part is the whole reason to build it this way. A concurrency bug you can reproduce on
+demand is a normal bug.
+
+### Exhaustive enumeration, the model checker way
+
+Random simulation samples the orderings. It's good at finding bugs and bad at telling you there
+aren't any, because you never know what it didn't try.
+
+So the marker protocol also goes through an enumerator that walks orderings exhaustively instead of
+sampling. It does a depth first search over every point where the scheduler could cut one server off
+and run another, bounded by how many times that's allowed to happen in a single run, and it checks
+the safety properties at every step rather than only at the end. Bounding the preemptions is what
+makes it finish: almost all real concurrency bugs show up with very few, so a small bound covers a
+lot of ground for a search that terminates.
+
+This is what a model checker like TLC does to a TLA+ spec, with one deliberate difference.
+
+<Callout type="warn">
+  Ledger has no TLA+ specification. Nothing here is a proof.
+</Callout>
+
+The tradeoff is worth being clear about, because the two are not interchangeable. A TLA+ spec checks
+a model of the design, exhaustively and at any scale, but it can't tell you the code matches the
+model. Ledger's enumerator runs the actual `src` modules, so what it clears is the code you ship,
+but only up to the preemption bound and only for the scenarios written down.
+
+A spec would catch a design that's wrong everywhere. This catches an implementation that's wrong
+somewhere. Neither one covers for the other.
+
+### Mutation testing
+
+The third layer checks the first two. Known defects get injected into the source on purpose, one at
+a time, and the suite is judged on how many of them it catches. A test suite that stays green
+against a broken Ledger isn't testing anything, and this is the only way to find that out.
+
+It has already paid for itself by culling harnesses that looked thorough and caught nothing.
+
+### The properties
+
+All three layers assert the same things, which are the ones any correct ledger has to hold.
+
+Money is conserved: nothing is created or destroyed by a transfer, whatever happens mid flight.
+Every transaction applies to all of its keys or none. No balance goes negative. And nothing stays
+pending once things go quiet, so the system always settles rather than deadlocking with money stuck
+in escrow.

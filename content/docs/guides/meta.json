@@ -1,0 +1,12 @@
+{
+  "title": "Guides",
+  "pages": [
+    "sessions",
+    "entity-stores",
+    "transfers",
+    "transactions",
+    "migrations",
+    "recovery",
+    "testing"
+  ]
+}

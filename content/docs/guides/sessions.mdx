@@ -1,0 +1,96 @@
+---
+title: Sessions
+description: Loading players, getting at their data, and putting it away again.
+---
+
+A session is one player's data live on this server. You get one from `Load` and it stays around
+until `Unload` or the store is destroyed.
+
+## The lifecycle
+
+```luau
+Players.PlayerAdded:Connect(function(Player)
+	Store:Load(Player)
+end)
+
+Players.PlayerRemoving:Connect(function(Player)
+	Store:Unload(Player)
+end)
+
+game:BindToClose(function()
+	Ledger.CloseAll()
+end)
+```
+
+`Load` yields while it reads the record and folds it. If that fails, the player gets kicked with a
+message asking them to rejoin, which is better than letting them play on a blank profile and
+overwrite the real one.
+
+Calling `Load` twice for the same player warns and does nothing the second time. If the player
+leaves while the load is still going, Ledger notices and releases the session instead of leaving it
+hanging around.
+
+`Unload` cancels the autosave timer, pushes everything queued, and yields until it's durable.
+
+## Getting the session
+
+There are four ways, and which one you want depends on whether you can cope with it not being there.
+
+`Store:Get(Player)` gives you the session or `nil`. Use it when not loaded is a normal thing that can
+happen.
+
+`Store:Expect(Player)` gives you the session or throws. Use it in code that only runs after you know
+the player is loaded, so you get an error instead of a silent `nil` if you're wrong.
+
+`Store:IsLoaded(Player)` is just the boolean.
+
+`Store:WaitForLoaded(Player)` yields until the session is there and gives it back, or gives `nil` if
+the player left before it finished. This is the one for callbacks that fire during a join, like
+`ProcessReceipt`.
+
+There's also `Store:Read(Player)`, which gives you the state table directly or `nil`, for when you
+only want to look at something.
+
+## Autosave
+
+Every session autosaves on a 30 second timer. It pushes queued ops, and if the log has gotten long
+or heavy it compacts as well.
+
+If the server is out of datastore budget, the autosave is skipped and Ledger warns. That's the point
+where ops start piling up, and if it keeps going you'll start seeing
+[`Backlog`](/docs/concepts/reasons) on writes.
+
+## Log size
+
+`Session.LogSize` is how many ops are in the stored log, and `Session.LogBytes` is roughly how many
+bytes those ops plus the queued ones take. Both are read only and mostly useful for a debug readout.
+
+You don't need to watch them. Autosave compacts on its own. `Session:Compact()` is there if you want
+to force it, like right before you do something that's about to write a lot.
+
+## Shutting down
+
+`Ledger.CloseAll()` is the whole shutdown path. It stops the background sweeper, tells every store's
+queue to skip ahead to the last write, saves every live session, and yields until all of it is done.
+
+Put it in `BindToClose` and don't put anything else there. Roblox gives you a limited window on
+shutdown, and `CloseAll` is already built to spend it in the right order.
+
+`Store:Destroy()` does the same for one store and takes it out of the registry, so you can build
+another one with that name. You mostly want this in tests.
+
+## Watching state
+
+```luau
+local Connection = Session:Observe():Subscribe(function(State)
+	UpdateHud(Player, State)
+end)
+```
+
+It fires on every change that goes through, which includes ones that came from another server and
+turned up when a transfer or transaction settled. It does not fire for a refused op, because nothing
+changed.
+
+Nothing disconnects your listeners for you. A released session stops pushing, so they never fire
+again, and if you didn't store the connection anywhere it gets collected with the session. If you
+did store it, disconnect it yourself. See [Observer](/docs/reference/observer).

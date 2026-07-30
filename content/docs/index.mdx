@@ -1,0 +1,86 @@
+---
+title: Overview
+description: A lock free datastore library for Roblox, where state is a fold over a log of changes.
+---
+
+Ledger keeps player data as a log of changes instead of a document you overwrite. You never write
+state. You write down the change you want, a function you own decides if it's allowed, and state is
+what falls out of replaying those changes.
+
+```luau
+local Store = Ledger.New({
+	Name = "PlayerData",
+	Default = { Gold = 100, Items = {} },
+	Reducer = function(State, Op)
+		if Op.Kind == "SpendGold" then
+			if Op.Amount > State.Gold then
+				return nil -- refused, on every server, forever
+			end
+			local Next = table.clone(State)
+			Next.Gold -= Op.Amount
+			return Next
+		end
+		return nil
+	end,
+})
+
+Store:Load(Player)
+Store:Expect(Player):Apply("SpendGold", { Amount = 25 })
+```
+
+Two servers spend the same 100 gold, both writes go through, the fold takes one and refuses the
+other. Every server agrees, every time.
+
+## Why there's no session lock
+
+A session lock works by stopping the second writer. You pay for that with a lease to wait out when a
+server dies, a join stall for whoever is locked, and no way to touch someone who is offline or on
+another server.
+
+A fold that validates makes the bad state unreachable instead, so there's nothing to unlock when a
+server crashes. What you pay instead is discipline. Changes have to be ops with names, and you have
+to write a reducer.
+
+## What's in it
+
+<Cards>
+  <Card title="The fold" href="/docs/concepts/the-fold">
+    State is a pure fold of the log, so every server works out the same answer with no lock.
+  </Card>
+  <Card title="Apply and Commit" href="/docs/concepts/apply-and-commit">
+    Apply is instant and local. Commit is durable and tells you whether your op won.
+  </Card>
+  <Card title="Cross server writes" href="/docs/reference/store">
+    Edit, Transfer and Tx work on any key, online here, elsewhere, or offline.
+  </Card>
+  <Card title="Entity stores" href="/docs/guides/entity-stores">
+    String keys for clans, listings, world records. Shared state no server owns.
+  </Card>
+  <Card title="Transfers" href="/docs/guides/transfers">
+    A balance moved through an escrow, deduped by id, and it fixes itself after a crash.
+  </Card>
+  <Card title="Transactions" href="/docs/guides/transactions">
+    Two phase commit across two to four keys, which can sit in two different stores.
+  </Card>
+  <Card title="Once" href="/docs/concepts/once">
+    Name an op after a receipt or an order and it applies at most one time, forever.
+  </Card>
+  <Card title="Migrations" href="/docs/guides/migrations">
+    Shape upgrades with a version on them, safe to roll out one server at a time.
+  </Card>
+</Cards>
+
+## What it isn't
+
+Ledger is server side only. It doesn't replicate to clients, it doesn't do leaderboards or ordered
+stores, and it won't hide a reducer that's wrong. If your reducer reads `os.time()` or
+`math.random()`, two servers will fold the same log into different state. Ledger warns about that in
+Studio rather than hiding it.
+
+<Callout type="info">
+  Ledger is tested the way TigerBeetle tests a database: against a simulated datastore that can drop
+  writes, acknowledge writes it dropped, corrupt records, split servers apart, kill them halfway
+  through a write and move the clock around, all off one seed so anything that breaks replays
+  exactly. The transaction protocol also goes through an exhaustive interleaving search on top of
+  that. See [Testing](/docs/guides/testing).
+</Callout>

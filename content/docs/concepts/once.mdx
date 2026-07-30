@@ -1,0 +1,136 @@
+---
+title: Once
+description: Naming an op after something outside your game so it applies one time, forever.
+---
+
+Every op Ledger writes already has an id, so a retry can't apply twice. The catch is that the id is
+generated when the op is made, so if your code crashes and rebuilds the op, it's a different op with
+a different id, and it applies again.
+
+`Once` fixes that. You give the op a name that comes from outside your game, and Ledger applies it
+at most one time on that key, forever.
+
+```luau
+Session:CommitOp({
+	Id = HttpService:GenerateGUID(false),
+	Kind = "ProductGrant",
+	ProductId = 123456,
+	Once = `receipt:{Receipt.PurchaseId}`,
+}):Wait()
+```
+
+The name is remembered inside the profile, under `_Received`, so it survives a compaction, a rejoin,
+and two servers racing the same replay.
+
+## ProcessReceipt
+
+This is what `Once` was built for. Roblox calls `ProcessReceipt` again when the player buys
+something else or rejoins any server, and it keeps calling until you answer `PurchaseGranted`. It
+can also fail to record on its end after you already answered granted, so a retry follows a
+perfectly healthy grant. Two servers can even run the same receipt at the same time if the player
+joins the second one before the first answered.
+
+So the grant has to happen at most once, and you still have to say granted on every replay after
+that.
+
+```luau
+MarketplaceService.ProcessReceipt = function(Receipt)
+	local Player = Players:GetPlayerByUserId(Receipt.PlayerId)
+	if not Player then
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	local Session = Store:WaitForLoaded(Player)
+	if not Session then
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	local Name = `receipt:{Receipt.PurchaseId}`
+	local _, Why = Session:Commit("ProductGrant", {
+		ProductId = Receipt.ProductId,
+		Once = Name,
+	}):Wait()
+
+	if Why == Ledger.Reason.Unresolved or not Session:DidApply(Name) then
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	return Enum.ProductPurchaseDecision.PurchaseGranted
+end
+```
+
+Three things in there need explaining.
+
+**`WaitForLoaded`, not `Get`.** The callback fires as the player joins, which can be before their
+profile is loaded, and a `ProcessReceipt` callback is allowed to yield for as long as the server
+runs. Answering `NotProcessedYet` because the session wasn't ready spends a whole retry, and the
+next one isn't until they rejoin.
+
+**`DidApply`, not the Commit result.** `Commit` tells you whether this call changed anything. The
+first one did. Every replay after it doesn't, and every replay after it is still a granted purchase.
+`DidApply` answers the question Roblox is actually asking.
+
+**Check `Unresolved` first.** It means there's no settled answer yet, so `DidApply` might be reading
+a fold that a stuck transaction can still flip. Answer `NotProcessedYet` and let the retry ask again
+once things are settled.
+
+<Callout type="warn">
+  Never answer `PurchaseGranted` for something you aren't sure went through. An unresolved purchase
+  is never refunded, so the player keeps their Robux and gets nothing.
+</Callout>
+
+## Ids you pick yourself
+
+`Once` is for any id you didn't make up on the spot. A support tool order, a webhook delivery, a
+one time unlock:
+
+```luau
+local function BuyGamepass(Session, Pass: string): boolean
+	local Name = `pass:{Pass}`
+	local _, Why = Session:Commit("UnlockGamepass", { Pass = Pass, Once = Name }):Wait()
+	return Why ~= Ledger.Reason.Unresolved and Session:DidApply(Name)
+end
+```
+
+And for someone who isn't in this server at all:
+
+```luau
+local function GrantOffline(Store, UserId: number, ProductId: number, OrderId: string): (boolean, Ledger.Reason?)
+	local Name = `order:{OrderId}`
+	Store:Edit(UserId, "ProductGrant", { ProductId = ProductId, Once = Name }):Wait()
+
+	local Applied, Why = Store:DidApply(UserId, Name):Wait()
+	return Applied == true, Why
+end
+```
+
+`Applied == true` rather than `if Applied then`, so a read that failed comes back as "don't know"
+with a reason instead of being mistaken for "not granted".
+
+## DidApply
+
+`Session:DidApply(Name)` and `Store:DidApply(Key, Name)` both answer whether a `Once` name ever
+applied on that key. The session version reads live state, returns a plain `boolean`, and can't
+fail. The store version reads the record and gives you a `Future<boolean?, Reason?>`.
+
+<Callout type="warn">
+  `Store:DidApply` answers `nil` when it couldn't read the record at all, which is not the same as
+  `false`. Compare against `true`, not truthiness, or a datastore hiccup reads as "never granted"
+  and you hand out the reward a second time.
+</Callout>
+
+It's asking about the name, not about this call, which is exactly why it's the right thing to check
+on a replay.
+
+## Rules
+
+The name has to be a non empty string. Anything else and the commit is refused with `Invalid`.
+
+Names are namespaced, so a `Once` name can't collide with a transfer id or a transaction id even if
+they're spelled the same.
+
+Your reducer never has to dedupe. By the time it runs, `Once` has already decided. Write the branch
+as if it only ever runs one time, because it does.
+
+Don't put `Once` on a [transaction](/docs/guides/transactions) leg. The transaction id already makes
+every leg land at most once, and Ledger throws if you pass one anyway.
