@@ -118,3 +118,8 @@ local Applied = Store:DidApply(UserId, `support:{TicketId}`):Wait() == true
 ```
 
 Put a `Once` name on anything a support tool writes. Someone will click the button twice.
+
+It stops the double click, and it stops a retry minutes or days later. It does not stop the same
+ticket being fulfilled again months later, because the name is only remembered for a rolling 30 days.
+If a reopened ticket has to stay fulfilled for good, record that in the state your reducer can see
+and refuse on it there. See [how long a name is remembered](/docs/concepts/once#how-long-a-name-is-remembered).

@@ -139,6 +139,16 @@ What it does not cover is a receipt still unsettled after 30 days of the same pl
 things. That means a month of your grant failing every time, which is a bigger problem than the
 dedupe.
 
+<Callout type="warn">
+  So `Once` is for retry windows, not for names that stay meaningful forever. A support ticket
+  reopened two months later, or an unlock you want to be permanent, is outside the window. 
+  Put that rule in the reducer instead.
+</Callout>
+
+The gamepass example above is a case in point. `pass:{Pass}` reads like it is doing the work, but
+what actually stops a second unlock a year later is the reducer refusing when the pass is already
+owned. The `Once` name only stops the retries.
+
 ## Rules
 
 The name has to be a non empty string. Anything else and the commit is refused with `Invalid`.
