@@ -36,7 +36,17 @@ shrink it are still allowed, so a cleanup works when you're already over.
 Hitting the unsaved caps gives you [`Backlog`](/docs/concepts/reasons), and in practice that only
 happens when the datastore is down.
 
-## Transactions
+## Applied names
+
+The set of applied ids lives in the state, so it counts against the state cap. It does not grow
+without bound. Every time a name is written into it, anything already in there older than 30 days is
+dropped, whichever kind of name it is.
+
+That sweep only rebuilds the set when something in it is actually old enough to go, so the usual
+write pays nothing for it.
+
+One entry is about 41 bytes, so a rolling 30 day window is nowhere near the state cap for any real
+player. `ClearDelivered` drops delivered transfer ids outright if you want them gone sooner.
 
 Between 2 and 4 legs, and a key can only appear once.
 

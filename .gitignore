@@ -3,6 +3,7 @@
 
 # generated content
 .source
+/ledger-docs.txt
 
 # test & build
 /coverage

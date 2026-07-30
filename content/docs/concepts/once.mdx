@@ -1,6 +1,6 @@
 ---
 title: Once
-description: Naming an op after something outside your game so it applies one time, forever.
+description: Naming an op after something outside your game so it only ever applies once.
 ---
 
 Every op Ledger writes already has an id, so a retry can't apply twice. The catch is that the id is
@@ -8,7 +8,7 @@ generated when the op is made, so if your code crashes and rebuilds the op, it's
 a different id, and it applies again.
 
 `Once` fixes that. You give the op a name that comes from outside your game, and Ledger applies it
-at most one time on that key, forever.
+at most one time on that key.
 
 ```luau
 Session:CommitOp({
@@ -121,6 +121,23 @@ fail. The store version reads the record and gives you a `Future<boolean?, Reaso
 
 It's asking about the name, not about this call, which is exactly why it's the right thing to check
 on a replay.
+
+## How long a name is remembered
+
+Long enough that you don't have to think about it, and not so long that the set grows forever.
+
+A name is written into the applied set with the time it was applied. The next time any name is
+written to that key, anything in the set older than 30 days goes. So the set is a rolling window
+rather than a pile that only gets bigger.
+
+The check for an already applied name happens before any of that, and against everything still in
+the set. So a player who wanders off for two months and comes back to a receipt Roblox is still
+retrying is fine: nothing was written while they were away, so nothing was swept, and the name is
+still sitting there.
+
+What it does not cover is a receipt still unsettled after 30 days of the same player buying other
+things. That means a month of your grant failing every time, which is a bigger problem than the
+dedupe.
 
 ## Rules
 

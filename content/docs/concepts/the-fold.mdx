@@ -15,9 +15,9 @@ means appending one op. Nothing ever overwrites state.
 
 ## Why that gets rid of the lock
 
-Two servers appending to the same key isn't a conflict, because appends commute. Both ops end up in
-the log. Whatever order they land in, every server that folds that log later walks the ops in the
-same order and gets the same state.
+Two servers appending to the same key isn't a conflict, because neither append overwrites the other.
+Both ops end up in the log, the datastore settles what order they're in, and every server that folds
+that log later walks them in that same order and gets the same state.
 
 That's what stands in for the session lock. A lock stops the second writer. A fold lets both of them
 write and then decides, and it decides the same way everywhere.
