@@ -34,26 +34,6 @@ budgets, real refill rates, real queueing, and a real throughput cap per key. Tu
 What the mock keeps from the real thing: the 50 character name and key limits, the 4 MB value limit,
 30 versions of history, JSON only values, and paged listing.
 
-### Saving too often
-
-One key takes a write every 6 seconds, whatever budget the server has left. That's the limit that
-decides your save interval, and it's easy to miss because the budget looks nowhere near spent. See
-[Limits](/docs/limits#timing).
-
-The mock counts it instead of blocking on it, so a test that writes one key twice doesn't sit there
-for six seconds. `Rushed` is how many writes landed inside another one's cooldown:
-
-```luau
-local Service = Ledger.UseMock({ Players = 30 })
-
--- run your save path
-
-assert(Service.Rushed == 0, `{Service.Rushed} writes were crowding a key`)
-```
-
-It follows the same clock as everything else, so if you're jumping time forward with `UseClock` the
-count follows. It only runs with `Throttled` on.
-
 ## The clock
 
 `Ledger.UseClock` swaps out the function Ledger reads the time from.

@@ -66,21 +66,6 @@ Autosave runs every 30 seconds per session, and compacts as well when the log ha
 
 An autosave is skipped when the server is under 4 requests of write budget, and it warns.
 
-One key takes a write every 6 seconds. This is the limit that decides how often you can save, not the
-request budget, and the two are easy to confuse. A server's budget is `60 + 40 per player` requests a
-minute, so a full server has thousands to spend, and a 30 second autosave uses about 5% of it. You
-could go to a 6 second autosave and still only be at 25% of budget. Go below that and the budget is
-still fine while every save is fighting the same key.
-
-The [mock](/docs/guides/testing) counts this for you. `Service.Rushed` is how many writes happened
-inside another one's cooldown on the same key, and it should be zero:
-
-```luau
-local Mock = Ledger.UseMock({ Players = 30 })
--- run your game's save path
-assert(Mock.Rushed == 0, `{Mock.Rushed} writes were crowding a key`)
-```
-
 ## Versions
 
 Roblox keeps 30 days of history per key. `History` pages up to 100 at a time and defaults to 25.
