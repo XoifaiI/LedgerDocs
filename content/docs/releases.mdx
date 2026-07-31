@@ -23,15 +23,15 @@ answer for every reason it might have failed.
 
 ### Upgrading
 
-`Erase` is the one you can see from outside. It now leaves a tombstone rather than deleting the key,
-which is what lets it turn away a transfer that was already on its way in. Reads of an erased key are
-unchanged, they still come back as a fresh profile, and any ordinary write clears the tombstone. If
-you have tooling that checks the key is really gone, call `Erase` a second time once the 8 days are up
-and it removes it. See [Erase](/docs/guides/recovery#erase).
+`Erase` is the one you can see from outside. It leaves a tombstone rather than deleting the key, so a
+transfer already on its way in gets refused and refunded. Reads of an erased key are unchanged, they
+still come back as a fresh profile, and any ordinary write clears the tombstone. If you have tooling
+that checks the key is really gone, call `Erase` a second time after the 8 days and it removes it.
+See [Erase](/docs/guides/recovery#erase).
 
 `OnLoadFailed` is opt in and the default is the kick you already had, so nothing changes unless you
-pass it. It's worth passing if you deploy while people are playing, since `Behind` wants a teleport
-and a rejoin can't fix it. See [Ledger.New](/docs/reference/ledger#onloadfailed).
+pass it. Pass it if you deploy while people are playing, since `Behind` wants a teleport and a rejoin
+can't fix it. See [Ledger.New](/docs/reference/ledger#onloadfailed).
 
 ## 3.1.0
 

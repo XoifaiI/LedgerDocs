@@ -92,10 +92,10 @@ dropped after 30 days, which is well past the point any retry could still turn u
 here for a support tool, or for a live incident where you want one key dealt with right now.
 
 <Callout type="warn">
-  `Store:Erase(Key)` hands over any money the key was sending out, and turns away anything sent *to*
-  it for the next 8 days so those senders get refunded instead of losing it. Sending to an erased key
-  answers `Refused`. If the handover itself fails, it warns with how much was lost and you'll have to
-  pay the receivers back yourself. See [Erase](/docs/guides/recovery#erase).
+  `Store:Erase(Key)` hands over any money the key was sending out. For 8 days after that it refuses
+  anything sent to the key, so those senders get refunded rather than losing it. Sending to an erased
+  key answers `Refused`. If the handover itself fails, it warns with how much was lost and you'll
+  have to pay the receivers back yourself. See [Erase](/docs/guides/recovery#erase).
 </Callout>
 
 ## When to use a transaction instead

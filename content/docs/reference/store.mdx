@@ -168,10 +168,10 @@ nothing turned the write down, this server just can't read what's there.
 Store:Erase(Key: KeyLike) -> Future<boolean, Reason?>
 ```
 
-Throws the record away and leaves a tombstone, which turns away anything sent to that key for the
-next 8 days so in flight money goes back to whoever sent it. Hands over money this key was sending
-out first. Warns if the player is still in the server, because their session will write part of it
-back. See [Erase](/docs/guides/recovery#erase).
+Throws the record away and leaves a tombstone. Hands over money this key was sending out first. For
+8 days the tombstone refuses anything sent to the key, so in flight money returns to whoever sent it.
+Warns if the player is still in the server, because their session will write part of it back. See
+[Erase](/docs/guides/recovery#erase).
 
 `false` means the record is still there. Check it before you tell anyone their data is gone.
 

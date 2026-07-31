@@ -76,14 +76,14 @@ First it checks for money this key set aside for an in flight transfer and hands
 erase doesn't destroy anything that was on its way out. If it can't finish the handover it warns with
 how much was lost, and you'll have to pay the receivers back yourself.
 
-Money on its way *in* is the harder direction, because another server can be delivering to this key
-at the moment you erase it. So an erase leaves a tombstone in place of the record rather than
-removing the key. For the next 8 days anything sent to that key is turned away with `Refused`, the
-sender keeps the money set aside, and the ordinary refund gives it back to them. After that the
-tombstone goes cold and the key behaves like any other, by which time nothing can still be in flight.
+Money arriving is a different problem, because another server can be delivering to this key while you
+erase it. So an erase leaves a tombstone in place of the record instead of removing the key. For 8
+days anything sent to that key is refused, the sender keeps the money set aside, and the usual refund
+returns it. After 8 days the tombstone stops refusing and the key behaves like any other. Nothing can
+still be in flight by then.
 
-The tombstone is a timestamp and nothing else, no player data, and any ordinary write clears it. If
-you want the key gone for real, call `Erase` again once the tombstone is cold and it removes it.
+The tombstone holds a timestamp and no player data, and any ordinary write clears it. To remove the
+key outright, call `Erase` again after the 8 days.
 
 Erasing a player who's still in the server warns, because their live session will just write part of
 the record back on its next save. Unload them first:
@@ -93,9 +93,9 @@ Store:Unload(Player)
 Store:Erase(Player.UserId):Wait()
 ```
 
-The erase is still a version, so `History` will show it and the data is
-recoverable through `PeekVersion` for 30 days. Roblox keeps that history whatever Ledger does, so
-know about it before you erase someone for a legal reason.
+The erase is still a version, so `History` shows it and the data is recoverable through `PeekVersion`
+for 30 days. Roblox keeps that history whatever Ledger does, so know about it before you erase
+someone for a legal reason.
 
 ## Sweeping
 

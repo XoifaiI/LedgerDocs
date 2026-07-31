@@ -36,10 +36,9 @@ one.
 
 ### OnLoadFailed
 
-By default a load that fails kicks the player with "Your data failed to load, please rejoin". That's
-the right thing most of the time, but it treats every failure the same, and they aren't the same.
-`OnLoadFailed` is handed the player and the [reason](/docs/concepts/reasons), and returns whether it
-dealt with them. Return `true` and Ledger leaves them alone. Return `false` and it kicks as usual.
+A load that fails kicks the player with "Your data failed to load, please rejoin". `OnLoadFailed`
+takes that decision instead. It gets the player and the [reason](/docs/concepts/reasons), and returns
+whether it dealt with them. `true` and Ledger leaves them alone, `false` and it kicks.
 
 ```luau
 local Store = Ledger.New({
@@ -57,20 +56,15 @@ local Store = Ledger.New({
 })
 ```
 
-`Behind` means the record was written by a newer build than this server is running, so a rejoin lands
-them on the same old server and fails again. `Unresolved` is usually the datastore having a bad
-minute, where a rejoin is exactly right.
+`Behind` means a newer build wrote the record, so a rejoin puts them on the same old server and fails
+again. `Unresolved` is usually a datastore outage, where a rejoin is the right answer.
 
-It's a callback rather than an [Observer](/docs/reference/observer) because it has to answer, and an
-observer can't. It's allowed to yield, which is what makes a teleport possible, and anything sitting
-in `WaitForLoaded` is let go before it's called rather than after.
+It can yield, so a teleport works. Anything waiting in `WaitForLoaded` is released before it runs.
 
-If it throws, Ledger warns and kicks, same as if it had returned `false`. If it says `true` and the
-player is still sitting in the server with no data, you get a warning, since that's almost always a
-mistake.
+If it throws, Ledger warns and kicks. If it returns `true` and the player is still in the server with
+no data, Ledger warns about that too.
 
-Only for `Keys = "Player"` stores, since `Store:Load` is what calls it. Passing it on a
-`Keys = "String"` store throws at build time.
+Only for `Keys = "Player"` stores. Passing it on a `Keys = "String"` store throws at build time.
 
 ## Ledger.Reason
 
