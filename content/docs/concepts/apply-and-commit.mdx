@@ -30,6 +30,29 @@ What it costs you is that the answer is local. It knows what this server has, no
 server appended a second ago. If the player is only writing from one server, which is the normal
 case, that's fine.
 
+### When the answer changes under you
+
+`Apply` returns `true` straight away, and the op only reaches the log on the next save. If another
+server wrote to that key in between, the fold can refuse your op when it finally lands, after you
+already told the player it worked.
+
+It needs two different ops competing for the same rule to be visible. The same op twice looks fine,
+because both servers land on the same number either way. Two different ones don't:
+
+```luau
+-- 100 gold. server A spends 80, server B spends 30, neither knows about the other
+A:Apply("SpendGold", { Amount = 80 })   -- A shows 20
+B:Apply("SpendGold", { Amount = 30 })   -- B shows 70
+
+-- both ops reach the log. A's lands first, so B's would take the balance negative
+-- and the reducer refuses it. B's player watches 70 become 20
+```
+
+Nothing is lost or double spent, and every server agrees once it settles. But the player on B saw a
+number that was never true. Render from state rather than from the return value and the correction
+arrives on its own, through [`Observe`](/docs/reference/observer). Use `Commit` where seeing the
+wrong number for a moment would be worse than waiting.
+
 ## Commit
 
 `Commit` pushes everything queued, appends the op, waits for the datastore to take it, refolds from

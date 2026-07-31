@@ -5,6 +5,34 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 3.1.1
+
+Erasing a key could destroy money that was still on its way to it, and a failed load had one
+answer for every reason it might have failed.
+
+```diff
++ OnLoadFailed, so a failed load can teleport or retry instead of always kicking
++ Erase leaves a tombstone, so money still on its way in goes back to whoever sent it
++ The mock counts writes that crowd one key, so a save interval can be checked offline
+
+- A transfer landing mid erase being destroyed with the sender already settled
+
+! Erase leaves the key in place as a tombstone for 8 days, it used to delete it
+! Sending to a key that was erased answers Refused rather than going through
+```
+
+### Upgrading
+
+`Erase` is the one you can see from outside. It now leaves a tombstone rather than deleting the key,
+which is what lets it turn away a transfer that was already on its way in. Reads of an erased key are
+unchanged, they still come back as a fresh profile, and any ordinary write clears the tombstone. If
+you have tooling that checks the key is really gone, call `Erase` a second time once the 8 days are up
+and it removes it. See [Erase](/docs/guides/recovery#erase).
+
+`OnLoadFailed` is opt in and the default is the kick you already had, so nothing changes unless you
+pass it. It's worth passing if you deploy while people are playing, since `Behind` wants a teleport
+and a rejoin can't fix it. See [Ledger.New](/docs/reference/ledger#onloadfailed).
+
 ## 3.1.0
 
 Every method that could fail now says why. Before this, a read that failed handed you back nothing

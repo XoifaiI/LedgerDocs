@@ -24,6 +24,7 @@ misbehave later.
 | `Balance` | `string?` | Names a number field for [transfers](/docs/guides/transfers). |
 | `Migrations` | `{ Migration }?` | See [Migrations](/docs/guides/migrations). |
 | `Keys` | `"Player" \| "String"` | Defaults to `"Player"`. |
+| `OnLoadFailed` | `((Player, Reason) -> boolean)?` | What to do when a load fails. See below. |
 
 The name caps at 47 rather than the datastore's 50 because Ledger also creates `<Name>_Tx` for
 transaction markers.
@@ -32,6 +33,44 @@ transaction markers.
 
 Two stores can't share a name in one server. Call `Store:Destroy()` first if you need to rebuild
 one.
+
+### OnLoadFailed
+
+By default a load that fails kicks the player with "Your data failed to load, please rejoin". That's
+the right thing most of the time, but it treats every failure the same, and they aren't the same.
+`OnLoadFailed` is handed the player and the [reason](/docs/concepts/reasons), and returns whether it
+dealt with them. Return `true` and Ledger leaves them alone. Return `false` and it kicks as usual.
+
+```luau
+local Store = Ledger.New({
+	Name = "PlayerData",
+	Reducer = Reducer,
+	Default = { Gold = 0 },
+	OnLoadFailed = function(Player: Player, Why: Ledger.Reason): boolean
+		if Why == Ledger.Reason.Behind then
+			-- this server is running an old build, send them to one that isn't
+			TeleportService:Teleport(game.PlaceId, Player)
+			return true
+		end
+		return false
+	end
+})
+```
+
+`Behind` means the record was written by a newer build than this server is running, so a rejoin lands
+them on the same old server and fails again. `Unresolved` is usually the datastore having a bad
+minute, where a rejoin is exactly right.
+
+It's a callback rather than an [Observer](/docs/reference/observer) because it has to answer, and an
+observer can't. It's allowed to yield, which is what makes a teleport possible, and anything sitting
+in `WaitForLoaded` is let go before it's called rather than after.
+
+If it throws, Ledger warns and kicks, same as if it had returned `false`. If it says `true` and the
+player is still sitting in the server with no data, you get a warning, since that's almost always a
+mistake.
+
+Only for `Keys = "Player"` stores, since `Store:Load` is what calls it. Passing it on a
+`Keys = "String"` store throws at build time.
 
 ## Ledger.Reason
 
