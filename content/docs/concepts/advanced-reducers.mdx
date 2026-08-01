@@ -280,6 +280,46 @@ local LEVEL_XP = 100
 `Owned` and `Wearing` are counts of `Pets` and `Equipped`. They are stored so no handler has to walk
 either table.
 
+`Fuse` has nine rules to check, so they get names of their own rather than nine `if`s in a row. Each
+one answers a question you could say out loud.
+
+```luau
+local function NewPet(Species: string, Level: number): Pet
+	return { Species = Species, Level = Level, Xp = 0, Locked = false }
+end
+
+-- can this one pet go into a fuse of this species at this level
+local function Fusable(State: Profile, Id: string, Species: string, Level: number): boolean
+	local Pet = State.Pets[Id]
+	if Pet == nil then
+		return false
+	end
+	if Pet.Species ~= Species or Pet.Level ~= Level then
+		return false
+	end
+	return not Pet.Locked and not State.Equipped[Id]
+end
+
+-- do these ids name a legal fuse, and if so what are they all
+local function FuseInput(State: Profile, Ids: { string }): Pet?
+	local Base = State.Pets[Ids[1]]
+	if Base == nil then
+		return nil
+	end
+
+	local Counted: { [string]: true } = {}
+	for _, Id in Ids do
+		if Counted[Id] or not Fusable(State, Id, Base.Species, Base.Level) then
+			return nil
+		end
+		Counted[Id] = true
+	end
+	return Base
+end
+```
+
+Then the handlers themselves stay short.
+
 ```luau
 type Handler = (State: Profile, Op: Ledger.Op) -> Profile?
 
@@ -297,7 +337,7 @@ function Handlers.Hatch(State: Profile, Op: Ledger.Op): Profile?
 	end
 
 	local Next = Patch(State, { Coins = State.Coins - HATCH_COST, Owned = State.Owned + 1 })
-	Next = SetPath(Next, { "Pets", Op.PetId }, { Species = Op.Species, Level = 1, Xp = 0, Locked = false })
+	Next = SetPath(Next, { "Pets", Op.PetId }, NewPet(Op.Species, 1))
 
 	if State.Discovered[Op.Species] == nil then
 		Next = SetPath(Next, { "Discovered", Op.Species }, true)
@@ -359,36 +399,16 @@ function Handlers.Fuse(State: Profile, Op: Ledger.Op): Profile?
 		return nil
 	end
 
-	local First = State.Pets[Op.PetIds[1]]
-	if First == nil then
+	local Base = FuseInput(State, Op.PetIds)
+	if Base == nil then
 		return nil
-	end
-
-	local Counted: { [string]: true } = {}
-	for _, Id in Op.PetIds do
-		local Pet = State.Pets[Id]
-		if Pet == nil or Counted[Id] then
-			return nil
-		end
-		if Pet.Species ~= First.Species or Pet.Level ~= First.Level then
-			return nil
-		end
-		if Pet.Locked or State.Equipped[Id] then
-			return nil
-		end
-		Counted[Id] = true
 	end
 
 	local Next: Profile = State
 	for _, Id in Op.PetIds do
 		Next = SetPath(Next, { "Pets", Id }, nil)
 	end
-	Next = SetPath(Next, { "Pets", Op.PetId }, {
-		Species = First.Species,
-		Level = First.Level + 1,
-		Xp = 0,
-		Locked = false
-	})
+	Next = SetPath(Next, { "Pets", Op.PetId }, NewPet(Base.Species, Base.Level + 1))
 
 	return Patch(Next, { Owned = State.Owned - FUSE_COUNT + 1 })
 end
@@ -402,7 +422,7 @@ local function Reducer(State: Profile, Op: Ledger.Op): Profile?
 end
 ```
 
-Six things in there are worth pointing at.
+Seven things in there are worth pointing at.
 
 **The species is `Op.Species`, and the pet id is `Op.PetId`.** `Id` and `Kind` belong to Ledger, and
 `Op.Kind` here is already `"Hatch"`. Name your own fields something else or Ledger overwrites them
@@ -411,7 +431,7 @@ with a warning.
 **The caller picks the id and rolls the species.** The reducer cannot call `math.random`, so both
 arrive on the op. The server rolls, then writes down what it rolled.
 
-**`Counted` in `Fuse` is the one that matters.** Without it, `PetIds = { "a", "a", "a" }` passes every
+**`Counted` in `FuseInput` is the one that matters.** Without it, `PetIds = { "a", "a", "a" }` passes every
 other check. It deletes one pet and hands back one a level higher, which is a duplication exploit.
 The removal loop cannot catch it either, since removing the same key three times removes it once.
 
