@@ -58,7 +58,7 @@ Ledger keeps its own bookkeeping in the state table, under keys starting with an
 
 `Ledger.New` throws if your `Default` declares any key starting with `_`. Your reducer will see both
 fields on `State`, and `table.clone` carries them across without you doing anything. Drop them by
-accident and Ledger puts them back. Write your own values into them and you're on your own.
+accident and Ledger puts them back. Write your own values into them and you can break the dedupe.
 
 ## What you can store
 

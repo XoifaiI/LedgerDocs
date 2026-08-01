@@ -31,7 +31,7 @@ the reserve is refused and you get `Refused`.
 **Deliver.** It appends an op to the receiver that adds the money and records the transfer id in
 their `_Received`.
 
-**Settle.** It goes back to the sender and drops the hold, because the money has landed.
+**Settle.** It goes back to the sender and drops the hold, because the money has arrived.
 
 Money is only ever in one of three places: the sender's balance, the sender's `_Held`, or the
 receiver's balance. There's no moment where it's in two, and no moment where it's in none. That's

@@ -72,15 +72,15 @@ end
 Check the answer. If you are erasing to satisfy a deletion request, `false` means it did not happen
 and you have not finished the job.
 
-First it checks for money this key set aside for an in flight transfer and hands it over, so a normal
+First it checks for money this key set aside for a transfer that has not finished and hands it over, so a normal
 erase doesn't destroy anything that was on its way out. If it can't finish the handover it warns with
 how much was lost, and you'll have to pay the receivers back yourself.
 
 Money arriving is a different problem, because another server can be delivering to this key while you
 erase it. So an erase leaves a tombstone in place of the record instead of removing the key. For 8
 days anything sent to that key is refused, the sender keeps the money set aside, and the usual refund
-returns it. After 8 days the tombstone stops refusing and the key behaves like any other. Nothing can
-still be in flight by then.
+returns it. After 8 days the tombstone stops refusing and the key behaves like any other. No transfer can
+still be unfinished by then.
 
 The tombstone holds a timestamp and no player data, and any ordinary write clears it. To remove the
 key outright, call `Erase` again after the 8 days.

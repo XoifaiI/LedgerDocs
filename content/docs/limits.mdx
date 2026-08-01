@@ -46,13 +46,15 @@ without bound. Every time a name is written into it, anything already in there o
 dropped, whichever kind of name it is.
 
 That sweep only rebuilds the set when something in it is actually old enough to go, so the usual
-write pays nothing for it.
+write costs nothing.
 
 One entry is about 30 bytes when Ledger picked the id, more if you named the transfer yourself, so a
 rolling 30 day window is nowhere near the state cap for any real player. `ClearDelivered` drops
 delivered transfer ids outright if you want them gone sooner.
 
 Naming your transfers `tip:8412` rather than after a random string keeps this set small.
+
+## Transactions
 
 Between 2 and 4 legs, and a key can only appear once.
 
@@ -78,5 +80,5 @@ Roblox keeps 30 days of history per key. `History` pages up to 100 at a time and
 
 ## What isn't limited
 
-There's no cap on how many servers write the same key at once. The fold is what buys you that, and
-it's the one number you don't have to plan around.
+There's no cap on how many servers write the same key at once. The fold is why. It's the one number
+you don't have to plan around.

@@ -24,7 +24,7 @@ local B = Store:Peek(SecondUserId)
 print(A:Wait().Gold + B:Wait().Gold)
 ```
 
-Both reads are in flight while you sit on the first `Wait`. Writing it as
+Both reads are already running while you sit on the first `Wait`. Writing it as
 `Store:Peek(First):Wait() + Store:Peek(Second):Wait()` costs you two round trips instead of one.
 
 ## Wait

@@ -1,0 +1,437 @@
+---
+title: Advanced reducers
+description: Nested state, dispatch, and what folding costs you.
+---
+
+[Writing a reducer](/docs/concepts/reducer) covers the rules. This is what to do once the state is
+deep, the op kinds run past a dozen, and the if chain stops being readable.
+
+Nothing here is a dependency. It's all a few lines you paste into your own project.
+
+## Reaching into nested state
+
+`table.clone` is shallow and the state is deep frozen, so every level you touch needs its own clone.
+Two levels down that's still fine:
+
+```luau
+local Next = table.clone(State)
+Next.Pets = table.clone(State.Pets)
+Next.Pets[Op.PetId] = table.clone(State.Pets[Op.PetId])
+Next.Pets[Op.PetId].Level += 1
+return Next
+```
+
+Three levels down it stops being readable. Forget one line and you get `attempt to modify a readonly
+table`. Forget it in a branch you rarely reach and you get a fold that disagrees with itself.
+
+Write it once instead:
+
+```luau
+local function SetPath<S>(State: S, Path: { any }, Value: any): S
+	local Depth = #Path
+	if Depth == 0 then
+		return Value
+	end
+
+	local Root = table.clone(State :: any)
+	local Node = Root
+
+	for Index = 1, Depth - 1 do
+		local Key = Path[Index]
+		local Held = Node[Key]
+		assert(
+			Held == nil or type(Held) == "table",
+			`SetPath: '{tostring(Key)}' holds a {typeof(Held)}, not a table`
+		)
+
+		local Fresh = if Held == nil then {} else table.clone(Held)
+		Node[Key] = Fresh
+		Node = Fresh
+	end
+
+	Node[Path[Depth]] = Value
+	return Root :: any
+end
+```
+
+The whole example above becomes one line:
+
+```luau
+return SetPath(State, { "Pets", Op.PetId, "Level" }, State.Pets[Op.PetId].Level + 1)
+```
+
+Only the path you name gets cloned. Every other subtree stays shared by reference. Ledger then
+re-freezes only what changed.
+
+Incrementing needs the old value first. Give that its own function:
+
+```luau
+local function UpdatePath<S>(State: S, Path: { any }, Change: (Held: any) -> any, Fallback: any?): S
+	local Held: any = State
+	for _, Key in Path do
+		if type(Held) ~= "table" then
+			Held = nil
+			break
+		end
+		Held = Held[Key]
+	end
+
+	return SetPath(State, Path, Change(if Held == nil then Fallback else Held))
+end
+```
+
+```luau
+return UpdatePath(State, { "Pets", Op.PetId, "Level" }, function(Level: number): number
+	return Level + 1
+end, 0)
+```
+
+Setting a path to `nil` removes that key, so there's no separate remove.
+
+Changing two or three fields at the top takes a third one, so you don't clone the root once per
+field:
+
+```luau
+local function Patch<S>(State: S, Changes: { [any]: any }): S
+	local Next = table.clone(State :: any)
+	for Key, Value in Changes do
+		Next[Key] = Value
+	end
+	return Next :: any
+end
+```
+
+```luau
+return Patch(State, { Coins = State.Coins - 250, Owned = State.Owned + 1 })
+```
+
+Those three cover it. `Patch` for fields at the top, `SetPath` to write down a path, `UpdatePath`
+to read one and write it back.
+
+## Dispatching without an if chain
+
+Past a dozen kinds a table of handlers is easier to read. It also stops you shadowing a branch by
+accident:
+
+```luau
+type Handler = (State: Profile, Op: Ledger.Op) -> Profile?
+
+local Handlers: { [string]: Handler } = {}
+
+function Handlers.SpendGold(State: Profile, Op: Ledger.Op): Profile?
+	if type(Op.Amount) ~= "number" or Op.Amount <= 0 or Op.Amount > State.Gold then
+		return nil
+	end
+	return SetPath(State, { "Gold" }, State.Gold - Op.Amount)
+end
+
+function Handlers.LevelPet(State: Profile, Op: Ledger.Op): Profile?
+	if State.Pets[Op.PetId] == nil then
+		return nil
+	end
+	return UpdatePath(State, { "Pets", Op.PetId, "Level" }, function(Level: number): number
+		return Level + 1
+	end, 0)
+end
+
+local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+	local Handler = Handlers[Op.Kind]
+	if Handler == nil then
+		return nil
+	end
+	return Handler(State, Op)
+end
+```
+
+A missing handler returns `nil`, which is a refusal. An old server should refuse a kind it has never
+heard of. See [ops you don't know](/docs/concepts/reducer#ops-you-dont-know).
+
+<Callout type="warn">
+  Don't put a `__` prefix on your own kinds. Ledger reserves that for its transfer and transaction
+  ops, and `Apply` refuses them with [`Invalid`](/docs/concepts/reasons).
+</Callout>
+
+## Splitting by domain
+
+Once several people are adding kinds, give each domain its own file and its own slice of the state:
+
+```luau
+-- Pets.luau
+local Pets = {}
+
+function Pets.Handlers.Hatch(Owned: { [string]: Pet }, Op: Ledger.Op): { [string]: Pet }?
+	...
+end
+```
+
+Then join them at the top, translating each slice's answer back into a whole profile:
+
+```luau
+local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+	local OnPets = Pets.Handlers[Op.Kind]
+	if OnPets ~= nil then
+		local Next = OnPets(State.Pets, Op)
+		return if Next == nil then nil else SetPath(State, { "Pets" }, Next)
+	end
+
+	local OnQuests = Quests.Handlers[Op.Kind]
+	if OnQuests ~= nil then
+		local Next = OnQuests(State.Quests, Op)
+		return if Next == nil then nil else SetPath(State, { "Quests" }, Next)
+	end
+
+	return nil
+end
+```
+
+A slice handler only sees its own subtree. It cannot reach across and couple two domains by accident.
+If a kind needs both, handle it at the top.
+
+## What folding costs
+
+The reducer does not run once per op. It runs once when you `Apply`. It runs again for every op in
+the log, on every read that folds the record. In Studio it runs a third time, when Ledger refolds to
+check the reducer is pure.
+
+Work that is O(n) in the size of your state, per op, becomes O(n squared) across a fold. Counting a
+collection to enforce a cap is the usual cause:
+
+```luau
+-- every Hatch walks every pet you own
+local Owned = 0
+for _ in State.Pets do
+	Owned += 1
+end
+if Owned >= 200 then
+	return nil
+end
+```
+
+Keep the count in the state instead and move it with the collection. A log of 128 ops against a
+profile holding 200 pets is 25,600 iterations per fold, on a path that runs on every read.
+
+## Keep the result storable
+
+Whatever the reducer returns gets written as JSON. No metatables, no functions, no NaN, no mixing
+array and string keys in one table, no holes in an array.
+
+A hole is easy to make without noticing. The obvious way to remove an item makes one:
+
+```luau
+local Next = table.clone(State)
+Next.Items = table.clone(State.Items)
+Next.Items[Index] = nil     -- leaves a hole
+return Next
+```
+
+Use `table.remove` on the copy, or rebuild the list, so the array stays dense:
+
+```luau
+local Items = table.clone(State.Items)
+table.remove(Items, Index)
+return SetPath(State, { "Items" }, Items)
+```
+
+Ledger refuses to compact a record whose state it cannot store, and warns with the field name.
+Nothing is lost. The log keeps growing until you fix it.
+
+## Don't error
+
+Check the op and return `nil`.
+
+```luau
+if type(Op.Amount) ~= "number" then
+	return nil
+end
+```
+
+A reducer that throws is a bug. It is not a refusal, and where the error surfaces depends on which
+method you called. See [check the fields](/docs/concepts/reducer#check-the-fields).
+
+## A worked example
+
+A pet game, with an inventory cap, equip slots, and fusing three pets of the same species into one a
+level higher.
+
+```luau
+type Pet = {
+	Species: string,
+	Level: number,
+	Xp: number,
+	Locked: boolean
+}
+
+type Profile = {
+	Coins: number,
+	Pets: { [string]: Pet },
+	Owned: number,
+	Equipped: { [string]: true },
+	Wearing: number,
+	Slots: number,
+	Discovered: { [string]: true }
+}
+
+local MAX_PETS = 200
+local FUSE_COUNT = 3
+local HATCH_COST = 250
+local LEVEL_XP = 100
+```
+
+`Owned` and `Wearing` are counts of `Pets` and `Equipped`. They are stored so no handler has to walk
+either table.
+
+```luau
+type Handler = (State: Profile, Op: Ledger.Op) -> Profile?
+
+local Handlers: { [string]: Handler } = {}
+
+function Handlers.Hatch(State: Profile, Op: Ledger.Op): Profile?
+	if type(Op.PetId) ~= "string" or type(Op.Species) ~= "string" then
+		return nil
+	end
+	if State.Pets[Op.PetId] ~= nil then
+		return nil
+	end
+	if State.Owned >= MAX_PETS or State.Coins < HATCH_COST then
+		return nil
+	end
+
+	local Next = Patch(State, { Coins = State.Coins - HATCH_COST, Owned = State.Owned + 1 })
+	Next = SetPath(Next, { "Pets", Op.PetId }, { Species = Op.Species, Level = 1, Xp = 0, Locked = false })
+
+	if State.Discovered[Op.Species] == nil then
+		Next = SetPath(Next, { "Discovered", Op.Species }, true)
+	end
+	return Next
+end
+
+function Handlers.Feed(State: Profile, Op: Ledger.Op): Profile?
+	if type(Op.PetId) ~= "string" or type(Op.Xp) ~= "number" or Op.Xp <= 0 then
+		return nil
+	end
+
+	local Pet = State.Pets[Op.PetId]
+	if Pet == nil then
+		return nil
+	end
+
+	local Gained = Pet.Xp + Op.Xp
+	local Next = SetPath(State, { "Pets", Op.PetId, "Xp" }, Gained % LEVEL_XP)
+	return UpdatePath(Next, { "Pets", Op.PetId, "Level" }, function(Level: number): number
+		return Level + Gained // LEVEL_XP
+	end, 1)
+end
+
+function Handlers.Equip(State: Profile, Op: Ledger.Op): Profile?
+	if type(Op.PetId) ~= "string" then
+		return nil
+	end
+	if State.Pets[Op.PetId] == nil or State.Equipped[Op.PetId] then
+		return nil
+	end
+	if State.Wearing >= State.Slots then
+		return nil
+	end
+
+	local Next = Patch(State, { Wearing = State.Wearing + 1 })
+	return SetPath(Next, { "Equipped", Op.PetId }, true)
+end
+
+function Handlers.Sell(State: Profile, Op: Ledger.Op): Profile?
+	if type(Op.PetId) ~= "string" then
+		return nil
+	end
+
+	local Pet = State.Pets[Op.PetId]
+	if Pet == nil or Pet.Locked or State.Equipped[Op.PetId] then
+		return nil
+	end
+
+	local Next = Patch(State, { Owned = State.Owned - 1, Coins = State.Coins + 50 * Pet.Level })
+	return SetPath(Next, { "Pets", Op.PetId }, nil)
+end
+
+function Handlers.Fuse(State: Profile, Op: Ledger.Op): Profile?
+	if type(Op.PetIds) ~= "table" or #Op.PetIds ~= FUSE_COUNT then
+		return nil
+	end
+	if type(Op.PetId) ~= "string" or State.Pets[Op.PetId] ~= nil then
+		return nil
+	end
+
+	local First = State.Pets[Op.PetIds[1]]
+	if First == nil then
+		return nil
+	end
+
+	local Counted: { [string]: true } = {}
+	for _, Id in Op.PetIds do
+		local Pet = State.Pets[Id]
+		if Pet == nil or Counted[Id] then
+			return nil
+		end
+		if Pet.Species ~= First.Species or Pet.Level ~= First.Level then
+			return nil
+		end
+		if Pet.Locked or State.Equipped[Id] then
+			return nil
+		end
+		Counted[Id] = true
+	end
+
+	local Next: Profile = State
+	for _, Id in Op.PetIds do
+		Next = SetPath(Next, { "Pets", Id }, nil)
+	end
+	Next = SetPath(Next, { "Pets", Op.PetId }, {
+		Species = First.Species,
+		Level = First.Level + 1,
+		Xp = 0,
+		Locked = false
+	})
+
+	return Patch(Next, { Owned = State.Owned - FUSE_COUNT + 1 })
+end
+
+local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+	local Handler = Handlers[Op.Kind]
+	if Handler == nil then
+		return nil
+	end
+	return Handler(State, Op)
+end
+```
+
+Six things in there are worth pointing at.
+
+**The species is `Op.Species`, and the pet id is `Op.PetId`.** `Id` and `Kind` belong to Ledger, and
+`Op.Kind` here is already `"Hatch"`. Name your own fields something else or Ledger overwrites them
+with a warning.
+
+**The caller picks the id and rolls the species.** The reducer cannot call `math.random`, so both
+arrive on the op. The server rolls, then writes down what it rolled.
+
+**`Counted` in `Fuse` is the one that matters.** Without it, `PetIds = { "a", "a", "a" }` passes every
+other check. It deletes one pet and hands back one a level higher, which is a duplication exploit.
+The removal loop cannot catch it either, since removing the same key three times removes it once.
+
+**`Fuse` chains `SetPath` down its list.** Each call clones the root and `Pets` again, which is four
+clones for three pets. That is fine here. If you were removing hundreds at once, clone `Pets` once by
+hand and write into that instead.
+
+**Nothing counts anything.** `Owned` and `Wearing` move with the tables they describe, so hatching the
+two hundredth pet costs the same as the first.
+
+**Every refusal is `nil`.** The caller gets `Refused` whether the player was broke, full, or holding a
+locked pet. If you want to tell them which, check before you write:
+
+```luau
+if State.Coins < HATCH_COST then
+	Tell(Player, "you need 250 coins")
+	return
+end
+
+Session:Apply("Hatch", { PetId = HttpService:GenerateGUID(false), Species = Roll() })
+```
+
+The reducer still checks. The check in front is for the message, and the one inside is the rule.

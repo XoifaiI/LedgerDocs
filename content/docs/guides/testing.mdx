@@ -119,8 +119,8 @@ So the marker protocol also goes through an enumerator that walks orderings exha
 sampling. It does a depth first search over every point where the scheduler could cut one server off
 and run another, bounded by how many times that's allowed to happen in a single run, and it checks
 the safety properties at every step rather than only at the end. Bounding the preemptions is what
-makes it finish: almost all real concurrency bugs show up with very few, so a small bound covers a
-lot of ground for a search that terminates.
+makes it finish. Almost all real concurrency bugs show up with very few, so a small bound still
+reaches most of them and the search ends.
 
 This is what a model checker like TLC does to a TLA+ spec, with one deliberate difference.
 
@@ -142,7 +142,7 @@ The third layer checks the first two. Known defects get injected into the source
 a time, and the suite is judged on how many of them it catches. A test suite that stays green
 against a broken Ledger isn't testing anything, and this is the only way to find that out.
 
-It has already paid for itself by culling harnesses that looked thorough and caught nothing.
+It has already removed harnesses that looked thorough and caught nothing.
 
 ### The properties
 

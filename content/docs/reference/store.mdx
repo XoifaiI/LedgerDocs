@@ -192,7 +192,7 @@ Store:Erase(Key: KeyLike) -> Future<boolean, Reason?>
 ```
 
 Throws the record away and leaves a tombstone. Hands over money this key was sending out first. For
-8 days the tombstone refuses anything sent to the key, so in flight money returns to whoever sent it.
+8 days the tombstone refuses anything sent to the key, so money still being sent returns to whoever sent it.
 Warns if the player is still in the server, because their session will write part of it back. See
 [Erase](/docs/guides/recovery#erase).
 
