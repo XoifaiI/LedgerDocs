@@ -62,6 +62,11 @@ return Next
 The state you get handed is deep frozen, so a mutation throws on the line that did it instead of
 corrupting a fold somewhere later.
 
+A buffer is the one thing freezing can't cover, because Luau has no way to freeze one. State can hold
+buffers and Ledger copies them rather than sharing them, so writing into one won't reach another
+server or another session. It will still change the state you're holding, and the fold won't agree
+with itself afterwards. Build a new buffer instead of writing into the one you were given.
+
 ## It has to not yield
 
 No `task.wait`, no `:Wait()`, no yielding datastore calls. Ledger runs the reducer inside a guard

@@ -111,16 +111,16 @@ warns and gets overwritten.
 ### Flush
 
 ```luau
-Session:Flush() -> Future<boolean>
+Session:Flush() -> Future<boolean, Reason?>
 ```
 
-Pushes queued ops without adding one. What autosave calls. `false` means it failed and the ops stay
-queued for next time.
+Pushes queued ops without adding one. What autosave calls. `false` comes with a
+[reason](/docs/concepts/reasons) and the ops stay queued for next time.
 
 ### Compact
 
 ```luau
-Session:Compact() -> Future<boolean>
+Session:Compact() -> Future<boolean, Reason?>
 ```
 
 Folds the log down into a fresh snapshot and drops the ops it absorbed. Autosave does this when the
@@ -129,7 +129,7 @@ log gets long, so you rarely need it.
 ### Release
 
 ```luau
-Session:Release() -> Future<boolean>
+Session:Release() -> Future<boolean, Reason?>
 ```
 
 Marks the session closed and pushes what's left. `Store:Unload` calls this for you, and calling it

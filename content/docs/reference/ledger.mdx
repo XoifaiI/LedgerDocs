@@ -29,7 +29,8 @@ misbehave later.
 The name caps at 47 rather than the datastore's 50 because Ledger also creates `<Name>_Tx` for
 transaction markers.
 
-`Default` can't declare any key starting with `_`, and it has to be storable, so JSON only.
+`Default` can't declare any key starting with `_`, and it has to be storable: numbers, strings,
+booleans, tables and buffers.
 
 Two stores can't share a name in one server. Call `Store:Destroy()` first if you need to rebuild
 one.

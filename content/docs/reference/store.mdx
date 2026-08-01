@@ -162,6 +162,29 @@ Puts the key back to `Default`, keeping `_Received` and `_Held`. A record writte
 server doesn't know answers [`Behind`](/docs/concepts/reasons) rather than `Refused`, because
 nothing turned the write down, this server just can't read what's there.
 
+### Inspect
+
+```luau
+Store:Inspect(Key: KeyLike) -> Future<Record?, Reason?>
+```
+
+The record itself rather than the state it folds to: the snapshot, the ops not yet compacted into it,
+the applied ids, and the version. `Peek` answers what the player has, `Inspect` answers what is on
+the key.
+
+```luau
+local Record = Store:Inspect(UserId):Wait()
+if Record then
+	print(`{#Record.Ops} op(s) waiting on top of the snapshot`)
+	for _, Op in Record.Ops do
+		print(Op.Id, Op.Kind)
+	end
+end
+```
+
+What it hands back is frozen, like everything else Ledger gives you. To change a key, use `Edit`,
+`Reset` or `Erase`.
+
 ### Erase
 
 ```luau
@@ -176,6 +199,18 @@ Warns if the player is still in the server, because their session will write par
 `false` means the record is still there. Check it before you tell anyone their data is gone.
 
 ## Maintenance
+
+### Resettle
+
+```luau
+Store:Resettle(Key: KeyLike) -> Future<boolean, Reason?>
+```
+
+Settles any transaction leg parked on the key and finishes any transfer set aside on it. `true` means
+nothing is left unfinished. `Busy` means a leg is still waiting on a decision, so try again later.
+
+The recovery sweep calls this for you every minute. It is here for the case the sweep warns about,
+where it is already following its limit of keys or has given up on one after five goes.
 
 ### RecoverTransfers
 

@@ -28,6 +28,9 @@ UTF-8.
 | Unsaved ops | 1.5 MB | Ledger |
 | Queued ops | 4096 | Ledger |
 
+State can hold numbers, strings, booleans, tables and buffers. A buffer costs about a third more than
+its length, since that's what the datastore charges to store one, and that's what these caps count.
+
 State caps at 2 MB rather than 4 so there's room for the ops sitting on top of the snapshot.
 
 An op that would push state over the cap is refused with [`Full`](/docs/concepts/reasons). Ops that
@@ -45,8 +48,11 @@ dropped, whichever kind of name it is.
 That sweep only rebuilds the set when something in it is actually old enough to go, so the usual
 write pays nothing for it.
 
-One entry is about 41 bytes, so a rolling 30 day window is nowhere near the state cap for any real
-player. `ClearDelivered` drops delivered transfer ids outright if you want them gone sooner.
+One entry is about 30 bytes when Ledger picked the id, more if you named the transfer yourself, so a
+rolling 30 day window is nowhere near the state cap for any real player. `ClearDelivered` drops
+delivered transfer ids outright if you want them gone sooner.
+
+Naming your transfers `tip:8412` rather than after a random string keeps this set small.
 
 Between 2 and 4 legs, and a key can only appear once.
 

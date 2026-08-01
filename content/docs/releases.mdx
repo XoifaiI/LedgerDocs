@@ -5,6 +5,43 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 3.1.2
+
+Op ids got shorter, there is a way to read the record on a key rather than the state it folds to, and
+the last few methods that answered a bare `false` now say why.
+
+```diff
++ Buffers can live in state and in ops
++ Store:Inspect, the record on a key rather than the state it folds to
++ Op ids named after the server and counted, half the length of the old ones
++ Flush, Compact and Release name the reason they failed
++ Store:Resettle is part of the api, and handles its key like every other method
+
+! Store:Resettle hands back a Future now, so it needs :Wait()
+```
+
+### Upgrading
+
+A buffer in state is copied rather than shared, so one session writing into one can't reach another.
+Freezing can't cover it though, since Luau has no way to freeze a buffer, so build a new one rather
+than writing into the one your reducer was handed. See
+[Writing a reducer](/docs/concepts/reducer#it-has-to-not-mutate).
+
+Op ids changed shape and nothing has to be done about it. An id is opaque, compared only for equality,
+so ids written by older builds keep working next to the new ones and there is no migration. If you
+were reading op ids expecting a GUID, they now look like `3c404902bf6a4a4e:41`.
+
+`Flush`, `Compact` and `Release` return a reason next to the boolean. Ignoring it is fine and the
+boolean means what it always meant, so nothing has to change. See
+[Session](/docs/reference/session#flush).
+
+`Resettle` is the one to look at. It was reachable before but never declared, and it took a key
+string straight through without checking it. It is on `Store` now, it resolves the key the way `Peek`
+and `Edit` do so a bad one throws where you wrote it, and it answers `Future<boolean, Reason?>`. If
+you were calling it, add `:Wait()`. `true` means nothing is left unfinished on the key, `Busy` means a
+transaction leg is still waiting on a decision and it is worth another go later. See
+[Resettle](/docs/reference/store#resettle).
+
 ## 3.1.1
 
 Erasing a key could destroy money that was still on its way to it, and a failed load had one
