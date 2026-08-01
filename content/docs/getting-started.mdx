@@ -27,26 +27,28 @@ It's a server realm package. Requiring it from a LocalScript won't work, and isn
 A store is one datastore name plus the rules for everything under it. Build it once, near the top of
 a server script.
 
+Start simple. One field, and a reducer that hands back the next state or `nil` to refuse:
+
 ```luau
 local Ledger = require(ServerStorage.Ledger)
 
 export type Profile = {
-	Gold: number,
-	Items: { string },
+	Gold: number
 }
 
 local function Reducer(State: Profile, Op: Ledger.Op): Profile?
 	if Op.Kind == "AddGold" then
-		local Next = table.clone(State)
-		Next.Gold += Op.Amount
-		return Next
-	elseif Op.Kind == "SpendGold" then
-		if Op.Amount > State.Gold then
+		if type(Op.Amount) ~= "number" or Op.Amount <= 0 then
 			return nil
 		end
-		local Next = table.clone(State)
-		Next.Gold -= Op.Amount
-		return Next
+		return { Gold = State.Gold + Op.Amount }
+	end
+
+	if Op.Kind == "SpendGold" then
+		if type(Op.Amount) ~= "number" or Op.Amount > State.Gold then
+			return nil
+		end
+		return { Gold = State.Gold - Op.Amount }
 	end
 
 	return nil
@@ -54,7 +56,7 @@ end
 
 local Store = Ledger.New({
 	Name = "PlayerData",
-	Default = { Gold = 100, Items = {} },
+	Default = { Gold = 100 },
 	Reducer = Reducer,
 	Balance = "Gold",
 })
@@ -66,6 +68,52 @@ don't keep them.
 
 `Balance` is optional. You only need it for [transfers](/docs/guides/transfers), and it names a
 number field that's already in `Default`.
+
+### Once there is more than one field
+
+Writing the next state out by hand stops working as soon as `Default` grows. Any field you don't
+mention is not in the state you handed back, so it is gone from that moment on.
+
+Copy the state and change what you need instead:
+
+```luau
+export type Profile = {
+	Gold: number,
+	Items: { string }
+}
+
+local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+	if Op.Kind == "AddGold" then
+		if type(Op.Amount) ~= "number" or Op.Amount <= 0 then
+			return nil
+		end
+
+		local Next = table.clone(State)
+		Next.Gold += Op.Amount
+		return Next
+	end
+
+	if Op.Kind == "PickUp" then
+		if type(Op.Item) ~= "string" then
+			return nil
+		end
+
+		local Next = table.clone(State)
+		Next.Items = table.clone(State.Items)
+		table.insert(Next.Items, Op.Item)
+		return Next
+	end
+
+	return nil
+end
+```
+
+`table.clone` is shallow, so `Items` needs a copy of its own before you touch it. The state you were
+handed is deep frozen, so writing into it throws on the line that did it rather than breaking a fold
+somewhere later.
+
+Deeper than that and the copying gets hard to read. [Advanced
+reducers](/docs/concepts/advanced-reducers) has a `SetPath` for it.
 
 ## Load and unload
 

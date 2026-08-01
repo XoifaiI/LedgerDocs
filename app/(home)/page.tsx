@@ -3,17 +3,23 @@ import Link from "next/link";
 
 const sample = `local Store = Ledger.New({
 	Name = "PlayerData",
-	Default = { Gold = 100, Items = {} },
+	Default = { Gold = 100 },
 	Reducer = function(State, Op)
+		if Op.Kind == "Earn" then
+			if type(Op.Amount) ~= "number" or Op.Amount <= 0 then
+				return nil
+			end
+			return { Gold = State.Gold + Op.Amount }
+		end
+
 		if Op.Kind == "SpendGold" then
-			if Op.Amount > State.Gold then
+			if type(Op.Amount) ~= "number" or Op.Amount > State.Gold then
 				return nil -- refused, on every server, forever
 			end
-			local Next = table.clone(State)
-			Next.Gold -= Op.Amount
-			return Next
+			return { Gold = State.Gold - Op.Amount }
 		end
-		return nil
+
+		return nil -- an op this build has never heard of
 	end,
 })
 
