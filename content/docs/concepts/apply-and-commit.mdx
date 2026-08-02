@@ -23,12 +23,11 @@ on the next `Flush`, `Commit` or `Unload`.
 local Ok, Why = Session:Apply("SpendGold", { Amount = 25 })
 ```
 
-Use it for whatever the player is doing right now. Spending, picking things up, progression, stats.
-This is the one to reach for by default.
+Use it by default, for whatever the player is doing right now. Spending, picking things up,
+progression, stats.
 
-What it costs you is that the answer is local. It knows what this server has, not what some other
-server appended a second ago. If the player is only writing from one server, which is the normal
-case, that's fine.
+The answer is local. It knows what this server has, and not what another server appended a second
+ago. Normally a player writes from one server only, so that's fine.
 
 ### When the answer changes under you
 
@@ -36,8 +35,8 @@ case, that's fine.
 server wrote to that key in between, the fold can refuse your op when it finally lands, after you
 already told the player it worked.
 
-It needs two different ops competing for the same rule to be visible. The same op twice looks fine,
-because both servers land on the same number either way. Two different ones don't:
+You only see it when two different ops compete for the same rule. The same op twice looks fine, since
+both servers reach the same number either way. Two different ops don't:
 
 ```luau
 -- 100 gold. server A spends 80, server B spends 30, neither knows about the other
@@ -48,10 +47,12 @@ B:Apply("SpendGold", { Amount = 30 })   -- B shows 70
 -- and the reducer refuses it. B's player watches 70 become 20
 ```
 
-Nothing is lost or double spent, and every server agrees once it settles. But the player on B saw a
-number that was never true. Render from state rather than from the return value and the correction
-arrives on its own, through [`Observe`](/docs/reference/observer). Use `Commit` where seeing the
-wrong number for a moment would be worse than waiting.
+Nothing is lost or double spent, and every server agrees once it settles. The player on B still saw a
+number that was never true.
+
+Render from state, not from the return value. The correction then arrives on its own through
+[`Observe`](/docs/reference/observer). Use `Commit` where a wrong number for a moment is worse than
+waiting.
 
 ## Commit
 
@@ -69,9 +70,9 @@ Use it when you're about to do something you can't take back. Handing out a purc
 webhook, telling another service the thing happened. `true` means the op is in the log, your reducer
 took it, and every server will agree from here on.
 
-Since the fold runs against the real record, `Commit` sees other servers' writes. It's also where a
-stuck [transaction](/docs/guides/transactions) leg on the key can make the answer provisional, and
-in that case you get [`Unresolved`](/docs/concepts/reasons) instead of a guess.
+The fold runs against the real record, so `Commit` sees other servers' writes. A stuck
+[transaction](/docs/guides/transactions) leg on the key can still change the answer afterwards. When
+that is possible, `Commit` says [`Unresolved`](/docs/concepts/reasons).
 
 ## CommitOp
 
@@ -87,8 +88,8 @@ local Ok, Why = Session:CommitOp({
 }):Wait()
 ```
 
-`Id` and `Kind` are required. `Once` is optional, and it's what makes the op apply at most one time
-on that key. See [Once](/docs/concepts/once).
+`Id` and `Kind` are required. `Once` is optional, and it makes the op apply at most one time on that
+key. See [Once](/docs/concepts/once).
 
 ## Which one
 
@@ -99,7 +100,7 @@ If the player wouldn't notice a rollback, `Apply`. If someone would file a ticke
 
 ## Flush
 
-`Session:Flush()` pushes queued ops without adding one. It's what autosave calls. You rarely need it
+`Session:Flush()` pushes queued ops without adding one. Autosave calls it. You rarely need it
 yourself, but it's there for the moment before you do something risky:
 
 ```luau

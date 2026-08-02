@@ -74,17 +74,19 @@ Store:Transfer(From, To, 250, HttpService:GenerateGUID(false)):Wait()
 Store:Transfer(From, To, 250, `trade:{Trade.Id}`):Wait()
 ```
 
-A GUID is fine in the second line. It is the same GUID every time, because it was made once. What
-breaks is making one at the call site. Each attempt is then a different transfer and Ledger has
-nothing to match it against, so the money moves again.
+The second line uses a GUID too. It works because the GUID was made once and the retry reads the same
+one. Making a GUID at the call site is what breaks. Every attempt is then a different transfer, so
+Ledger has nothing to match it against and the money moves again.
 
 `TradeId` is whatever already names that trade. If nothing names it yet, make the id when the trade
-opens and hold it there, next to the two players and the offer. An order id, a match id and a receipt
-id all work the same way. Never build one from the clock, and never build one from the amount or the
-two keys, because the same two players trading the same amount twice is a real thing.
+opens and store it on the trade, next to the two players and the offer. An order id, a match id and a
+receipt id all work the same way.
 
-[Where the id comes from](/docs/guides/transactions#where-the-id-comes-from) works through the three
-cases and what has to outlive what.
+Never build an id from the clock. Never build one from the amount and the two keys either. The same
+two players can trade the same amount twice, and you would swallow the second trade as a duplicate.
+
+[Where the id comes from](/docs/guides/transactions#where-the-id-comes-from) covers the three cases
+and how long each id has to survive.
 
 ## Reading the answer
 

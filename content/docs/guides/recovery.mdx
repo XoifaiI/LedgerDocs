@@ -36,9 +36,9 @@ end
 This folds that old record the same way a load would, so migrations run and you get real state, not
 raw storage.
 
-It's read only. There's no restore, and that's deliberate. Writing an old snapshot straight back
-over a live profile would wipe whatever happened in between, including money that arrived from a
-transfer. If you want to roll something back, look at what changed and write ops that undo it.
+It's read only, and there is no restore. Writing an old snapshot back over a live profile would wipe
+whatever happened in between, including money that arrived from a transfer. To roll something back,
+look at what changed and write ops that undo it.
 
 ## Reset
 
@@ -49,14 +49,14 @@ local Ok, Why = Store:Reset(UserId):Wait()
 ```
 
 It's an op like any other, so it goes in the log and every server sees it. It keeps `_Received` and
-`_Held` across, which matters. Wiping the applied id set would let an old retry apply again, and
-wiping the holds would destroy money that's mid transfer.
+`_Held` across. Wiping the applied id set would let an old retry apply again, and wiping the holds
+would destroy money that is part way through a transfer.
 
 A server won't reset a record written at a version it doesn't know, so you can't accidentally
 downgrade a profile during a deploy.
 
 It can answer [`Unresolved`](/docs/concepts/reasons) if a stuck transaction leg on that key would
-change the outcome. That means ask again, not that it failed.
+change the outcome. Ask again. The reset has not failed.
 
 ## Erase
 

@@ -23,7 +23,7 @@ The id comes first and it's required. It has to be a stable name derived from th
 settling, so a trade id, an order id, a match id. Never build it from the clock, and never mint one
 inside the `Tx` call.
 
-That's what makes a retry safe. Running the same id again doesn't do it twice. It finds every leg
+A stable id is what makes a retry safe. Running the same id again doesn't do it twice. It finds every leg
 already settled and answers `true` having moved nothing, so an `Unresolved` you want to chase is just
 the same call again:
 
@@ -71,8 +71,8 @@ enough. If you can't name what would retry, you don't need a durable id at all.
 ## The legs
 
 Between two and four legs. Each one names a key and an op.
-[Limits](/docs/limits#transactions) says where those two numbers come from, and it is worth knowing
-before you reach for a fourth leg.
+[Limits](/docs/limits#transactions) explains where those two numbers come from. Read it before you
+reach for a fourth leg.
 
 ```luau
 {

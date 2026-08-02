@@ -54,10 +54,10 @@ if State == nil then
 end
 ```
 
-Where it still bites is a timeout, and any Future you build yourself. In both cases the missing
-first return is `nil`, which is falsy, so `if Ok then` and `if State == nil then` both still do the
-right thing. What you lose is `Why`, which comes back `nil` as well, so you can't tell a refusal
-from a timeout that way. Use `Happened` when you need to.
+A timeout still bites, and so does any Future you build yourself. In both cases the missing first
+return is `nil`, which is falsy, so `if Ok then` and `if State == nil then` both do the right thing.
+You lose `Why` though. It comes back `nil` as well, so you can't tell a refusal from a timeout that
+way. Use `Happened` when you need to.
 
 ## Timeout
 
@@ -112,7 +112,7 @@ This is the only way to tell an empty result apart from a failure.
   outcome at all.
 </Callout>
 
-It has one rough edge worth knowing. A job that's still running and a job that failed both report
+It has one rough edge. A job that's still running and a job that failed both report
 `false`, so straight after a `Wait` that timed out you get `false` from a job that's doing fine and
 will finish a moment later. If you used a timeout, use `Happened(true)`. It waits for the job before
 it answers, so the answer means something.

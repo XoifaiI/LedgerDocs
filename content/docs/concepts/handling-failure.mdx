@@ -49,14 +49,13 @@ if Why == Ledger.Reason.Unresolved then
 end
 ```
 
-Generate a new id on the retry and you have no protection at all. That is the whole reason
-`Once` exists.
+Generate a new id on the retry and Ledger has nothing to match it against, so the retry applies a
+second time.
 
 ## Unresolved
 
-This is the one that costs money if you get it wrong. Ledger doesn't know whether the write applied.
-It does not mean no. Treat it as a refusal and you will eventually refuse something that went
-through.
+Ledger doesn't know whether the write applied. `Unresolved` does not mean no. Treat it as a refusal
+and you will eventually refuse something that already went through, which costs you money.
 
 **Retry with the same id.** See above. Without an id you have no way to ask again safely.
 
@@ -71,12 +70,12 @@ of waiting for the sweep. `true` means the key has nothing unfinished on it.
 
 ## Spent
 
-`Spent` reads like success and is not. Nothing was applied.
+Nothing was applied. `Spent` looks like success and it isn't.
 
 For a transfer the money is **back with the sender**. Hand out the item on a `Spent` and you have
 paid for something that was refunded.
 
-The answer that means "already happened" is `true`. Call `Transfer` again with an id that delivered,
+`true` is the answer that means "already happened". Call `Transfer` again with an id that delivered,
 or `Tx` again with an id that committed, and you get `true` with nothing moved.
 
 So on `Spent`, decide what to do about a name you can't reuse. Read the keys, pick a new id, or tell

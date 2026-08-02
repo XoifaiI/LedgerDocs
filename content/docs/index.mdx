@@ -39,13 +39,13 @@ other. Every server agrees, every time.
 
 ## Why there's no session lock
 
-A session lock works by stopping the second writer. You pay for that with a lease to wait out when a
-server dies, a join stall for whoever is locked, and no way to touch someone who is offline or on
-another server.
+A session lock stops the second writer. You pay for that in three ways. A dead server leaves a lease
+someone has to wait out. Whoever is locked waits at the join screen. And nothing can reach a player
+who is offline or on another server.
 
-A fold that validates makes the bad state unreachable instead, so there's nothing to unlock when a
-server crashes. What you pay instead is discipline. Changes have to be ops with names, and you have
-to write a reducer.
+A fold that validates makes the bad state unreachable, so nothing needs unlocking when a server
+crashes. It costs discipline instead. Changes have to be ops with names, and you have to write a
+reducer.
 
 ## What's in it
 
@@ -84,9 +84,9 @@ stores, and it won't hide a reducer that's wrong. If your reducer reads `os.time
 Studio rather than hiding it.
 
 <Callout type="info">
-  Ledger is tested the way TigerBeetle tests a database: against a simulated datastore that can drop
-  writes, acknowledge writes it dropped, corrupt records, split servers apart, kill them halfway
-  through a write and move the clock around, all off one seed so anything that breaks replays
-  exactly. The transaction protocol also goes through an exhaustive interleaving search on top of
-  that. See [Testing](/docs/guides/testing).
+  Ledger is tested the way TigerBeetle tests a database. It runs against a simulated datastore that
+  drops writes, reports success for writes it dropped, corrupts records, splits servers apart, kills
+  them halfway through a write, and moves the clock. Everything comes off one seed, so a failure
+  replays exactly. The transaction protocol also goes through an exhaustive interleaving search. See
+  [Testing](/docs/guides/testing).
 </Callout>

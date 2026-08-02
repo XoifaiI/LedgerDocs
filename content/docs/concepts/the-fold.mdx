@@ -19,8 +19,8 @@ Two servers appending to the same key isn't a conflict, because neither append o
 Both ops end up in the log, the datastore settles what order they're in, and every server that folds
 that log later walks them in that same order and gets the same state.
 
-That's what stands in for the session lock. A lock stops the second writer. A fold lets both of them
-write and then decides, and it decides the same way everywhere.
+This replaces the session lock. A lock stops the second writer. A fold takes both writes and decides
+afterwards, the same way on every server.
 
 <Callout type="info">
   The datastore settles the order once, at the moment of the append. It isn't decided per server and
@@ -44,9 +44,8 @@ A log that only ever grows would eventually hit the 4 MB value limit. Once a log
 Ledger folds it down into a fresh snapshot and drops the ops it just absorbed. Autosave does this on
 its own, and `Session:Compact()` forces it.
 
-Your reducer never sees any of that. The one thing compaction can't lose is the set of op ids that
-have already been applied, otherwise a retry after a compaction would apply twice. Ledger keeps that
-set inside the state itself, under `_Received`.
+Your reducer never sees any of that. Compaction must not lose the op ids it has already applied, or a
+retry afterwards would apply twice. Ledger keeps them inside the state itself, under `_Received`.
 
 ## Reserved fields
 

@@ -103,22 +103,22 @@ gamepass unlock.
 
 ### Gamepasses
 
-A gamepass is not a developer product. There is no `ProcessReceipt` and no receipt id. Roblox owns
-the fact that the player has the pass, so never store that. Store what you gave them for it.
+A gamepass has no `ProcessReceipt` and no receipt id. Roblox stores whether the player owns the pass,
+so you don't have to. You store what the pass gave them.
 
-Ask `UserOwnsGamePassAsync` for ownership. Two things about it will cost you money if you miss them.
+`UserOwnsGamePassAsync` answers whether they own it. Two things about it cost money.
 
 <Callout type="warn">
   `UserOwnsGamePassAsync` throws when the request fails, and it fails often under load. Wrap it in a
-  `pcall` and never turn a thrown call into `false`. `false` means "does not own it", and handing
-  that to a player who paid takes their pass away.
+  `pcall`. Never turn a thrown call into `false`. `false` means "does not own it", so you would take
+  the pass away from a player who paid for it.
 </Callout>
 
-Second, Roblox caches the answer per player, per pass, per server, and the cache does not update when
-the player buys one during the session. So take `PromptGamePassPurchaseFinished` as the answer for
+Roblox also caches the answer per player, per pass, per server. The cache does not change when the
+player buys the pass during the session. So use `PromptGamePassPurchaseFinished` as the answer for
 the rest of that session.
 
-Both point the same way. Keep what you know per session, and treat a failed check as "don't know":
+Keep both in one table, and let a failed check answer `nil`:
 
 ```luau
 local Known: { [Player]: { [number]: boolean } } = {}
@@ -157,13 +157,13 @@ Players.PlayerRemoving:Connect(function(Player)
 end)
 ```
 
-`nil` is the answer that matters. Ask again in a moment. Don't remove a perk, don't hide the button,
-and don't prompt them to buy something they already own.
+Handle `nil` by doing nothing and asking again later. Don't remove a perk. Don't hide the button.
+Don't prompt them to buy a pass they already own.
 
-The event only fires on the server that prompted. A player who buys on one server and hops to another
-gets a fresh read there, which by then is correct.
+`PromptGamePassPurchaseFinished` only fires on the server that showed the prompt. A player who buys
+on one server and joins another gets a fresh read there.
 
-Then the grant, with a `Once` name so a retry can't pay twice:
+Grant the pass with a `Once` name, so a retry cannot pay twice:
 
 ```luau
 local function GrantPass(Player: Player, PassId: number)
@@ -176,9 +176,8 @@ local function GrantPass(Player: Player, PassId: number)
 end
 ```
 
-Keep the real guard in the reducer. A `Once` name is forgotten after 30 days and a gamepass is
-forever, so the name only stops the retries. What stops a second grant a year later is your own
-state:
+The `Once` name only stops retries. Ledger forgets it after 30 days, and a gamepass lasts forever, so
+your reducer holds the permanent rule:
 
 ```luau
 if Op.Kind == "GrantPass" then
@@ -194,11 +193,11 @@ if Op.Kind == "GrantPass" then
 end
 ```
 
-`Op.Pass` is a string. A table keyed by numeric ids is an array with gaps and a datastore cannot
-store it. See [What you can store](/docs/concepts/the-fold#what-you-can-store).
+`Op.Pass` is a string. A table with number keys is an array, and an array with gaps cannot be
+stored. See [What you can store](/docs/concepts/the-fold#what-you-can-store).
 
-The event covers a purchase made here. It does not cover one made on another server, or on the
-website, or before you shipped the pass. So check on join as well:
+The event misses a purchase made on another server, on the website, or before you shipped the pass.
+So check on join too:
 
 ```luau
 for _, PassId in PASSES do
@@ -208,8 +207,8 @@ for _, PassId in PASSES do
 end
 ```
 
-`== true`, so a failed check does nothing this time. `GrantPass` is safe to call for a pass they
-already have, because the reducer refuses it, so there is no need to work out which ones are new.
+`== true`, so a failed check does nothing this time. Call `GrantPass` for every pass they own. The
+reducer refuses the ones they already have, so you don't have to work out which are new.
 
 ### Someone who isn't in this server at all
 

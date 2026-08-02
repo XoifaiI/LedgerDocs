@@ -65,10 +65,10 @@ corrupting a fold somewhere later.
 Cloning by hand stops reading well about three levels down. [Advanced
 reducers](/docs/concepts/advanced-reducers) has a `SetPath` that clones only the path you name.
 
-A buffer is the one thing freezing can't cover, because Luau has no way to freeze one. State can hold
-buffers and Ledger copies them rather than sharing them, so writing into one won't reach another
-server or another session. It will still change the state you're holding, and the fold won't agree
-with itself afterwards. Build a new buffer instead of writing into the one you were given.
+Freezing can't cover a buffer, because Luau has no way to freeze one. State can hold buffers, and
+Ledger copies them instead of sharing them, so writing into one can't reach another server or another
+session. It does still change the state you're holding, and the fold won't agree with itself
+afterwards. Build a new buffer instead of writing into the one you were given.
 
 ## It has to not yield
 
@@ -84,18 +84,18 @@ Anything else is a bug. Ledger refuses the op with [`Invalid`](/docs/concepts/re
 `table.clone(State)` carries `_Received` and `_Held` across for free, so most reducers never think
 about them.
 
-If you build the next state from scratch and drop them, Ledger puts them back rather than letting
-you lose the applied id set. What it won't always catch is you writing your own values into them. On
-a store with a `Balance` those get overwritten, but on a store without one a hand built `_Received`
-survives, and that's how you'd break the dedupe.
+If you build the next state from scratch and drop them, Ledger puts them back, so you can't lose the
+applied id set that way. It won't always catch you writing your own values into them. A store with a
+`Balance` overwrites those, but a store without one keeps a hand built `_Received`, and that breaks
+the dedupe.
 
 So don't drop them, and don't write to them. Read them if you want, they're just data.
 
 ## Ops you don't know
 
-Return `nil` for anything you don't recognise. That isn't an error, it's a refusal, and it's what
-makes a rolling deploy safe. An old server that's never heard of `NewFeatureOp` refuses it instead
-of guessing at it.
+Return `nil` for anything you don't recognise. Ledger treats that as a refusal, and it makes a
+rolling deploy safe. An old server that's never heard of `NewFeatureOp` refuses it instead of
+guessing at it.
 
 ## Check the fields
 

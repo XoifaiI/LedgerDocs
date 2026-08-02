@@ -94,9 +94,9 @@ Nothing changed. This is a bug in the calling code, and Ledger warns with the sp
 A newer server wrote that record and this one can't read it. Either the stored format is newer than
 this server's build, or the record needs a migration this build doesn't have.
 
-Nothing changed, and this is the one reason where retrying is pointless. It isn't a hiccup, it's a
-statement about which version of your game this server is running. It clears when the deploy
-finishes and every server is on the same build.
+Nothing changed, and retrying is pointless. `Behind` describes which version of your game this server
+is running, so nothing about the datastore will change it. It clears when the deploy finishes and
+every server is on the same build.
 
 You'll only see it during a rolling deploy, and only on records a newer server already touched. If
 you see it after a deploy has finished, someone is running an old build.
