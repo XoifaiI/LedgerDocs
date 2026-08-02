@@ -77,13 +77,21 @@ erase doesn't destroy anything that was on its way out. If it can't finish the h
 how much was lost, and you'll have to pay the receivers back yourself.
 
 Money arriving is a different problem, because another server can be delivering to this key while you
-erase it. So an erase leaves a tombstone in place of the record instead of removing the key. For 8
-days anything sent to that key is refused, the sender keeps the money set aside, and the usual refund
-returns it. After 8 days the tombstone stops refusing and the key behaves like any other. No transfer can
-still be unfinished by then.
+erase it. So an erase leaves a tombstone in place of the record instead of removing the key. Anything
+sent to a tombstoned key is refused and the sender keeps the money set aside.
 
-The tombstone holds a timestamp and no player data, and any ordinary write clears it. To remove the
-key outright, call `Erase` again after the 8 days.
+**The tombstone lasts until the next write on the key, or 8 days, whichever comes first.** Any
+ordinary write clears it, so a player who rejoins and loads clears it on the spot, and a transfer out
+of the key clears it too. Nobody is locked out of trading for 8 days. The window only runs its full
+length on a key nothing touches, and by the end of it no transfer can still be unfinished.
+
+The tombstone holds a timestamp and no player data. To remove the key outright, call `Erase` again
+after the 8 days.
+
+The refund to a turned away sender is not immediate. Their money stays set aside until the transfer
+is overdue, which is the same 8 days, and then the recovery sweep gives it back. Forcing
+`RecoverTransfers` on the sender before that does nothing, on purpose: a refund paid early could
+still be delivered afterwards and pay twice.
 
 Erasing a player who's still in the server warns, because their live session will just write part of
 the record back on its next save. Unload them first:

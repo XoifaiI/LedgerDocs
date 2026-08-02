@@ -14,6 +14,9 @@ if not Ok and Why == Ledger.Reason.Refused then
 end
 ```
 
+This page says what each one means. [Handling failures](/docs/concepts/handling-failure) says what to
+do about them.
+
 ## Refused
 
 Your reducer returned `nil`. The op was legal to write, it just wasn't allowed to happen, so the
@@ -24,10 +27,12 @@ Nothing changed. Don't retry it, the answer won't be different.
 
 ## Busy
 
-Someone else is in the middle of a transaction on that key and it hasn't finished yet. Ledger has
-already scheduled a background pass to clean it up.
+Someone else is in the middle of a transaction on that key and it hasn't finished yet. Nothing
+changed.
 
-Nothing changed. Retrying in a few seconds is reasonable.
+Ledger puts the key on the [recovery sweep](/docs/guides/recovery#sweeping), which runs every 60
+seconds. Your own retry usually gets there first, because every read and write settles what it finds
+pending on the key before doing anything else. Retry in a few seconds.
 
 ## Spent
 
@@ -42,25 +47,17 @@ id names a different set of keys or a different amount, or an earlier attempt wa
 Ledger would rather refuse than half apply it.
 
 <Callout type="warn">
-  `Spent` is not success. Nothing moved, and for a transfer the money is back where it started. Handing
-  out the item on a `Spent` is how you pay for something that was refunded.
+  `Spent` is not success. Nothing moved, and for a transfer the money is back where it started. See
+  [Spent](/docs/concepts/handling-failure#spent).
 </Callout>
-
-A retry that already went through answers `true`, not `Spent`. Calling `Transfer` again with an id
-that delivered, or `Tx` again with an id that committed, gives you `true` and moves nothing the second
-time. That is the answer that means "already happened".
-
-So on `Spent`, work out what you want to do about a name you can't reuse. Read the keys, pick a new
-id, or tell the player it didn't go through.
 
 ## Unresolved
 
-Ledger doesn't know. Either the datastore call failed in a way where the write might still have gone
-through, or a stuck transaction leg means the fold could still flip once it clears.
+Ledger doesn't know. Either the datastore call failed in a way that might still have written, or a
+transaction leg is stuck on the key and the fold can change once it settles.
 
-This is the important one. It doesn't mean no, it means don't know, so never treat it as a refusal.
-For a purchase, answer `NotProcessedYet` and let the retry ask again later. For anything with a
-`Once` name, `DidApply` will tell you what actually happened once things settle.
+`Unresolved` does not mean no, and it is the one that costs money if you treat it as a refusal. See
+[Unresolved](/docs/concepts/handling-failure#unresolved).
 
 ## Closed
 
@@ -106,35 +103,6 @@ you see it after a deploy has finished, someone is running an old build.
 
 <Callout type="warn">
   Never treat `Behind` as "this player has no data". The record is fine. This server is the problem,
-  and writing a fresh profile over the top would destroy it.
+  and writing a fresh profile over the top would destroy it. See
+  [Behind](/docs/concepts/handling-failure#behind).
 </Callout>
-
-## Handling them
-
-Most code only cares about two things: did it work, and can I retry.
-
-```luau
-local Ok, Why = Store:Edit(UserId, "GrantItem", { Item = "Sword" }):Wait()
-
-if Ok then
-	-- it went through, and a retry under the same id would answer true again
-elseif Why == Ledger.Reason.Unresolved or Why == Ledger.Reason.Busy then
-	-- no answer yet, ask again later with the same id
-else
-	-- Refused, Spent, Closed, Backlog, Full, Invalid, Behind:
-	-- it didn't happen, and asking again with this id won't change that
-end
-```
-
-Reads answer the same way, with the value in front:
-
-```luau
-local State, Why = Store:Peek(UserId):Wait()
-if State == nil then
-	-- Why says which of the failures it was
-	return
-end
-```
-
-A key nobody has ever written folds to your `Default`, so a read never gives you `nil` on success.
-`nil` always means it failed.

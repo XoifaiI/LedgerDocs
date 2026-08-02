@@ -1,6 +1,12 @@
 import { docs } from "collections/server";
 import { loader } from "fumadocs-core/source";
-import { docsContentRoute, docsImageRoute, docsRoute, siteUrl } from "./shared";
+import {
+  basePath,
+  docsContentRoute,
+  docsImageRoute,
+  docsRoute,
+  siteUrl,
+} from "./shared";
 
 // See https://fumadocs.dev/docs/headless/source-api for more info
 export const source = loader({
@@ -23,11 +29,14 @@ export function getPageImageUrl(page: (typeof source)["$inferPage"]) {
 }
 
 export function getPageMarkdownUrl(page: (typeof source)["$inferPage"]) {
+  // segments feed generateStaticParams, which Next prefixes with the base path itself
   const segments = [...page.slugs, "content.md"];
 
   return {
     segments,
+    // the copy button fetches this url raw, so unlike next/link it needs the base path spelled out
     url:
+      basePath +
       "/" +
       [page.locale, ...docsContentRoute.split("/"), ...segments]
         .filter(Boolean)

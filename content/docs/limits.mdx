@@ -58,6 +58,15 @@ Naming your transfers `tip:8412` rather than after a random string keeps this se
 
 Between 2 and 4 legs, and a key can only appear once.
 
+One key doesn't need a transaction, which is why two is the minimum. `Edit` already applies to a
+single key or refuses it.
+
+The maximum is four because each leg holds up a key while it waits. A leg is written to its key
+first and sits there unresolved, and anything else writing to that key meanwhile answers
+[`Busy`](/docs/concepts/reasons). If the server running the transaction dies, another one has to
+abort it, and it may not do that until 30 seconds per leg have passed. Four legs can hold four keys
+for two minutes.
+
 A transaction is considered dead after 60 seconds, so another server will abort it on the original's
 behalf. Committed markers get tidied up in the background about an hour later.
 

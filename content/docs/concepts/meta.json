@@ -1,4 +1,12 @@
 {
   "title": "Concepts",
-  "pages": ["the-fold", "reducer", "advanced-reducers", "apply-and-commit", "reasons", "once"]
+  "pages": [
+    "the-fold",
+    "reducer",
+    "advanced-reducers",
+    "apply-and-commit",
+    "reasons",
+    "handling-failure",
+    "once"
+  ]
 }

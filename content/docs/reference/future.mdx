@@ -114,8 +114,8 @@ This is the only way to tell an empty result apart from a failure.
 
 It has one rough edge worth knowing. A job that's still running and a job that failed both report
 `false`, so straight after a `Wait` that timed out you get `false` from a job that's doing fine and
-will finish a moment later. If you used a timeout, `Happened(true)` is the one that gives you a real
-answer, since it waits for the job rather than judging it mid flight.
+will finish a moment later. If you used a timeout, use `Happened(true)`. It waits for the job before
+it answers, so the answer means something.
 
 ## Errors don't propagate
 

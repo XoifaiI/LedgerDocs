@@ -63,8 +63,28 @@ local Ok, Why = Store:Transfer(From, To, 250, `trade:{TradeId}`):Wait()
 Now a second call with that id doesn't move anything again. You get `true` back, because the transfer
 already went through. That's the answer to retry on, and it stays `true` however many times you ask.
 
-Ids are 1 to 64 characters. Derive them from the thing being paid for, so a trade id or an order id,
-never from the clock.
+Ids are 1 to 64 characters. The id has to be the same string on every attempt, so make it once and
+keep it somewhere the retry can read it:
+
+```luau
+-- wrong, a new id each attempt, so a retry sends the money a second time
+Store:Transfer(From, To, 250, HttpService:GenerateGUID(false)):Wait()
+
+-- right, the id was made when the trade opened and lives on the trade
+Store:Transfer(From, To, 250, `trade:{Trade.Id}`):Wait()
+```
+
+A GUID is fine in the second line. It is the same GUID every time, because it was made once. What
+breaks is making one at the call site. Each attempt is then a different transfer and Ledger has
+nothing to match it against, so the money moves again.
+
+`TradeId` is whatever already names that trade. If nothing names it yet, make the id when the trade
+opens and hold it there, next to the two players and the offer. An order id, a match id and a receipt
+id all work the same way. Never build one from the clock, and never build one from the amount or the
+two keys, because the same two players trading the same amount twice is a real thing.
+
+[Where the id comes from](/docs/guides/transactions#where-the-id-comes-from) works through the three
+cases and what has to outlive what.
 
 ## Reading the answer
 
@@ -95,10 +115,11 @@ dropped after 30 days, which is well past the point any retry could still turn u
 here for a support tool, or for a live incident where you want one key dealt with right now.
 
 <Callout type="warn">
-  `Store:Erase(Key)` hands over any money the key was sending out. For 8 days after that it refuses
-  anything sent to the key, so those senders get refunded rather than losing it. Sending to an erased
-  key answers `Refused`. If the handover itself fails, it warns with how much was lost and you'll
-  have to pay the receivers back yourself. See [Erase](/docs/guides/recovery#erase).
+  `Store:Erase(Key)` hands over any money the key was sending out. After that it turns away anything
+  sent to the key and answers `Refused`, so the sender gets it back instead of losing it. That lasts
+  until the next write on the key, or 8 days, whichever comes first. If the handover itself fails, it
+  warns with how much was lost and you'll have to pay the receivers back yourself. See
+  [Erase](/docs/guides/recovery#erase).
 </Callout>
 
 ## When to use a transaction instead

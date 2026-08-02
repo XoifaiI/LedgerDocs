@@ -24,9 +24,12 @@ and two servers racing the same replay.
 
 ## ProcessReceipt
 
-This is what `Once` was built for. Roblox calls `ProcessReceipt` again when the player buys
-something else or rejoins any server, and it keeps calling until you answer `PurchaseGranted`. It
-can also fail to record on its end after you already answered granted, so a retry follows a
+This is what `Once` was built for. Roblox keeps calling `ProcessReceipt` until you answer
+`PurchaseGranted`. There is no timer on it. A receipt you answered `NotProcessedYet` on comes back in
+two cases only: the player buys another developer product on this server, or they join any server in
+the experience again.
+
+Roblox can also fail to record your answer after you already said granted, so a retry follows a
 perfectly healthy grant. Two servers can even run the same receipt at the same time if the player
 joins the second one before the first answered.
 
@@ -63,8 +66,8 @@ Three things in there need explaining.
 
 **`WaitForLoaded`, not `Get`.** The callback fires as the player joins, which can be before their
 profile is loaded, and a `ProcessReceipt` callback is allowed to yield for as long as the server
-runs. Answering `NotProcessedYet` because the session wasn't ready spends a whole retry, and the
-next one isn't until they rejoin.
+runs. Answering `NotProcessedYet` because the session wasn't ready spends a whole retry, and the next
+one waits for another purchase or a rejoin.
 
 **`DidApply`, not the Commit result.** `Commit` tells you whether this call changed anything. The
 first one did. Every replay after it doesn't, and every replay after it is still a granted purchase.
@@ -96,17 +99,119 @@ once things are settled.
 ## Ids you pick yourself
 
 `Once` is for any id you didn't make up on the spot. A support tool order, a webhook delivery, a
-one time unlock:
+gamepass unlock.
+
+### Gamepasses
+
+A gamepass is not a developer product. There is no `ProcessReceipt` and no receipt id. Roblox owns
+the fact that the player has the pass, so never store that. Store what you gave them for it.
+
+Ask `UserOwnsGamePassAsync` for ownership. Two things about it will cost you money if you miss them.
+
+<Callout type="warn">
+  `UserOwnsGamePassAsync` throws when the request fails, and it fails often under load. Wrap it in a
+  `pcall` and never turn a thrown call into `false`. `false` means "does not own it", and handing
+  that to a player who paid takes their pass away.
+</Callout>
+
+Second, Roblox caches the answer per player, per pass, per server, and the cache does not update when
+the player buys one during the session. So take `PromptGamePassPurchaseFinished` as the answer for
+the rest of that session.
+
+Both point the same way. Keep what you know per session, and treat a failed check as "don't know":
 
 ```luau
-local function BuyGamepass(Session, Pass: string): boolean
-	local Name = `pass:{Pass}`
-	local _, Why = Session:Commit("UnlockGamepass", { Pass = Pass, Once = Name }):Wait()
-	return Why ~= Ledger.Reason.Unresolved and Session:DidApply(Name)
+local Known: { [Player]: { [number]: boolean } } = {}
+
+-- true owns it, false does not, nil the check failed and you should not act on it
+local function OwnsPass(Player: Player, PassId: number): boolean?
+	local Seen = Known[Player]
+	if Seen and Seen[PassId] ~= nil then
+		return Seen[PassId]
+	end
+
+	local Ok, Has = pcall(function(): boolean
+		return MarketplaceService:UserOwnsGamePassAsync(Player.UserId, PassId)
+	end)
+	if not Ok then
+		return nil
+	end
+
+	Known[Player] = Seen or {}
+	Known[Player][PassId] = Has
+	return Has
+end
+
+MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(Player, PassId, Purchased)
+	if not Purchased then
+		return
+	end
+
+	Known[Player] = Known[Player] or {}
+	Known[Player][PassId] = true
+	GrantPass(Player, PassId)
+end)
+
+Players.PlayerRemoving:Connect(function(Player)
+	Known[Player] = nil
+end)
+```
+
+`nil` is the answer that matters. Ask again in a moment. Don't remove a perk, don't hide the button,
+and don't prompt them to buy something they already own.
+
+The event only fires on the server that prompted. A player who buys on one server and hops to another
+gets a fresh read there, which by then is correct.
+
+Then the grant, with a `Once` name so a retry can't pay twice:
+
+```luau
+local function GrantPass(Player: Player, PassId: number)
+	local Session = Store:WaitForLoaded(Player)
+	if not Session then
+		return
+	end
+
+	Session:Commit("GrantPass", { Pass = tostring(PassId), Once = `pass:{PassId}` }):Wait()
 end
 ```
 
-And for someone who isn't in this server at all:
+Keep the real guard in the reducer. A `Once` name is forgotten after 30 days and a gamepass is
+forever, so the name only stops the retries. What stops a second grant a year later is your own
+state:
+
+```luau
+if Op.Kind == "GrantPass" then
+	if State.Passes[Op.Pass] then
+		return nil
+	end
+
+	local Next = table.clone(State)
+	Next.Passes = table.clone(State.Passes)
+	Next.Passes[Op.Pass] = true
+	Next.Gold += 1000
+	return Next
+end
+```
+
+`Op.Pass` is a string. A table keyed by numeric ids is an array with gaps and a datastore cannot
+store it. See [What you can store](/docs/concepts/the-fold#what-you-can-store).
+
+The event covers a purchase made here. It does not cover one made on another server, or on the
+website, or before you shipped the pass. So check on join as well:
+
+```luau
+for _, PassId in PASSES do
+	if OwnsPass(Player, PassId) == true then
+		GrantPass(Player, PassId)
+	end
+end
+```
+
+`== true`, so a failed check does nothing this time. `GrantPass` is safe to call for a pass they
+already have, because the reducer refuses it, so there is no need to work out which ones are new.
+
+### Someone who isn't in this server at all
 
 ```luau
 local function GrantOffline(Store, UserId: number, ProductId: number, OrderId: string): (boolean, Ledger.Reason?)
@@ -172,9 +277,8 @@ dedupe.
   Put that rule in the reducer instead.
 </Callout>
 
-The gamepass example above is a case in point. `pass:{Pass}` reads like it is doing the work, but
-what actually stops a second unlock a year later is the reducer refusing when the pass is already
-owned. The `Once` name only stops the retries.
+The [gamepass example](#gamepasses) above shows both halves. `pass:{PassId}` stops the retries. The
+reducer refusing on `State.Passes[Op.Pass]` is what stops a second grant a year later.
 
 ## Rules
 

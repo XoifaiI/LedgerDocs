@@ -33,8 +33,11 @@ Leave `CCU` alone to test against the tighter of the two. Raise it to see what a
 experience budget is no longer the limit.
 
 `Service:GetRequestBudgetForRequestType` reports the per server budget only, the same as the real
-API. On the first line above, writes stop at 900 while it still reports 1260. Don't use it to decide
-whether you can write.
+API. On the first line above, writes stop at 900 while it still reports 1260.
+
+The number leaves the experience budget out, so it can read higher than what you can actually spend.
+A low reading still means you are short. Ledger only uses it to back off. A low reading makes it skip
+an autosave and warn, and it never treats a high one as room to write.
 
 `Throttled` defaults to true and is what makes the mock worth using. With it on you get real request
 budgets, real refill rates, real queueing, and a real throughput cap per key. Turn it off with
@@ -109,61 +112,53 @@ the same in memory keys. That's how you test the parts that only go wrong under 
 
 ## How Ledger itself is tested
 
-Three layers, and they catch different things.
+Three things, and they find different problems.
 
-### Deterministic simulation, the TigerBeetle way
+### Deterministic simulation
 
-The approach is lifted from [TigerBeetle](https://tigerbeetle.com), which runs its whole database
-against a simulated world rather than a real one.
+The idea comes from [TigerBeetle](https://tigerbeetle.com). Ledger runs against a fake datastore, and
+the fake one misbehaves on purpose. It drops writes. It reports success for a write it dropped. It
+corrupts records, splits servers apart, kills them halfway through a write, and moves the clock.
 
-Ledger runs against a simulated datastore that can drop writes, acknowledge writes it actually
-dropped, corrupt records, split servers apart, kill them halfway through a write and move the clock
-around. Everything that could be random reads from one seed, including the scheduler that decides
-which of the eight simulated servers runs next. So a run is a pure function of its seed, and a
-failure replays exactly instead of being something you saw once.
+Everything random comes from one seed, including the scheduler that picks which of the eight
+simulated servers runs next. A run is a pure function of its seed, so a failure replays exactly and
+you can debug it like anything else.
 
-That last part is the whole reason to build it this way. A concurrency bug you can reproduce on
-demand is a normal bug.
+### Exhaustive enumeration
 
-### Exhaustive enumeration, the model checker way
+Random simulation samples orderings. It finds bugs. It cannot tell you there are none left, because
+you never know what it did not try.
 
-Random simulation samples the orderings. It's good at finding bugs and bad at telling you there
-aren't any, because you never know what it didn't try.
+So the marker protocol goes through an enumerator as well. It walks the orderings instead of sampling
+them. It runs a depth first search over every point where the scheduler could stop one server and
+start another, and it checks the safety properties at every step, not only at the end.
 
-So the marker protocol also goes through an enumerator that walks orderings exhaustively instead of
-sampling. It does a depth first search over every point where the scheduler could cut one server off
-and run another, bounded by how many times that's allowed to happen in a single run, and it checks
-the safety properties at every step rather than only at the end. Bounding the preemptions is what
-makes it finish. Almost all real concurrency bugs show up with very few, so a small bound still
-reaches most of them and the search ends.
+The search is bounded by how many times one run may switch servers. That bound is what makes it
+finish. Most real concurrency bugs need very few switches, so a small bound still reaches them.
 
-This is what a model checker like TLC does to a TLA+ spec, with one deliberate difference.
+A model checker like TLC does this to a TLA+ spec. There is one difference.
 
 <Callout type="warn">
   Ledger has no TLA+ specification. Nothing here is a proof.
 </Callout>
 
-The tradeoff is worth being clear about, because the two are not interchangeable. A TLA+ spec checks
-a model of the design, exhaustively and at any scale, but it can't tell you the code matches the
-model. Ledger's enumerator runs the actual `src` modules, so what it clears is the code you ship,
-but only up to the preemption bound and only for the scenarios written down.
-
-A spec would catch a design that's wrong everywhere. This catches an implementation that's wrong
-somewhere. Neither one covers for the other.
+A TLA+ spec checks a model of the design. It is exhaustive and it works at any scale, but it cannot
+tell you the code matches the model. Ledger's enumerator runs the real `src` modules, so it clears
+the code you ship. It clears it only up to the preemption bound, and only for the scenarios someone
+wrote down. Neither one replaces the other.
 
 ### Mutation testing
 
-The third layer checks the first two. Known defects get injected into the source on purpose, one at
-a time, and the suite is judged on how many of them it catches. A test suite that stays green
-against a broken Ledger isn't testing anything, and this is the only way to find that out.
+This one checks the other two. Known defects go into the source on purpose, one at a time, and the
+suite is scored on how many it catches. A suite that stays green against a broken Ledger is not
+testing anything.
 
 It has already removed harnesses that looked thorough and caught nothing.
 
 ### The properties
 
-All three layers assert the same things, which are the ones any correct ledger has to hold.
+All three assert the same four things.
 
-Money is conserved: nothing is created or destroyed by a transfer, whatever happens mid flight.
-Every transaction applies to all of its keys or none. No balance goes negative. And nothing stays
-pending once things go quiet, so the system always settles rather than deadlocking with money stuck
-in escrow.
+Money is conserved, so a transfer never creates any and never destroys any. A transaction applies to
+all of its keys or to none of them. No balance goes negative. Nothing is still pending at the end of
+a run, so money never sits stuck in escrow.

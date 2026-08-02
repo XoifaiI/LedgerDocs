@@ -1,0 +1,109 @@
+---
+title: Handling failures
+description: When a retry is safe, and what to do about the reasons that need more than a retry.
+---
+
+Most code only cares about two things: did it work, and can I ask again.
+
+```luau
+local Ok, Why = Store:Edit(UserId, "GrantItem", { Item = "Sword" }):Wait()
+
+if Ok then
+	-- it went through, and a retry under the same id would answer true again
+elseif Why == Ledger.Reason.Unresolved or Why == Ledger.Reason.Busy then
+	-- no answer yet, ask again later with the same id
+else
+	-- Refused, Spent, Closed, Backlog, Full, Invalid, Behind:
+	-- it didn't happen, and asking again with this id won't change that
+end
+```
+
+Reads answer the same way with the value in front:
+
+```luau
+local State, Why = Store:Peek(UserId):Wait()
+if State == nil then
+	-- Why says which of the failures it was
+	return
+end
+```
+
+A key nobody has ever written folds to your `Default`, so a read never gives you `nil` on success.
+`nil` always means it failed.
+
+## Why a retry is safe
+
+Every op carries an id, and an id applies at most once on a key. A retry that already went through
+answers `true` and moves nothing the second time. That holds for
+[`Once`](/docs/concepts/once) names, transfer ids and transaction ids.
+
+The id has to be the same one. Build it before the call and keep it for the retry:
+
+```luau
+local OrderId = `order:{Receipt.PurchaseId}`
+
+local Ok, Why = Store:Edit(UserId, "Grant", { ProductId = 123, Once = OrderId }):Wait()
+if Why == Ledger.Reason.Unresolved then
+	-- same OrderId, so the retry costs nothing if the first one applied
+	Ok = Store:DidApply(UserId, OrderId):Wait() == true
+end
+```
+
+Generate a new id on the retry and you have no protection at all. That is the whole reason
+`Once` exists.
+
+## Unresolved
+
+This is the one that costs money if you get it wrong. Ledger doesn't know whether the write applied.
+It does not mean no. Treat it as a refusal and you will eventually refuse something that went
+through.
+
+**Retry with the same id.** See above. Without an id you have no way to ask again safely.
+
+**Ask instead of guessing.** [`Store:DidApply(Key, Name)`](/docs/reference/store#didapply) says
+whether a `Once` name applied. Compare it against `true`, because a failed read gives `nil`.
+
+**In `ProcessReceipt`, answer `NotProcessedYet`.** Roblox calls you again, and the next call gets a
+straight answer. The full pattern is in [Once](/docs/concepts/once#processreceipt).
+
+**For a stuck leg, [`Store:Resettle(Key)`](/docs/reference/store#resettle) settles it now** instead
+of waiting for the sweep. `true` means the key has nothing unfinished on it.
+
+## Spent
+
+`Spent` reads like success and is not. Nothing was applied.
+
+For a transfer the money is **back with the sender**. Hand out the item on a `Spent` and you have
+paid for something that was refunded.
+
+The answer that means "already happened" is `true`. Call `Transfer` again with an id that delivered,
+or `Tx` again with an id that committed, and you get `true` with nothing moved.
+
+So on `Spent`, decide what to do about a name you can't reuse. Read the keys, pick a new id, or tell
+the player it didn't go through. See [Ids and retries](/docs/guides/transfers#ids-and-retries) and
+[The id](/docs/guides/transactions#the-id).
+
+## Behind
+
+Retrying is pointless. This server is running an older build than the one that wrote the record, so
+nothing changes until the deploy finishes.
+
+<Callout type="warn">
+  Never treat `Behind` as "this player has no data". The record is fine. Writing a fresh profile over
+  the top would destroy it.
+</Callout>
+
+Pass [`OnLoadFailed`](/docs/reference/ledger#onloadfailed) if you deploy while people are playing. A
+rejoin puts them back on the same old server, so `Behind` wants a teleport. See
+[Rolling deploys](/docs/guides/migrations#rolling-deploys).
+
+## The rest
+
+| Reason | What to do |
+| --- | --- |
+| `Refused` | Your own rule said no. Tell the player. |
+| `Busy` | Retry in a few seconds. See [Stuck legs](/docs/guides/transactions#stuck-legs). |
+| `Closed` | The session is gone. Write before `Unload`, see [Shutting down](/docs/guides/sessions#shutting-down). |
+| `Backlog` | Saves aren't going through. Stop writing and look at the datastore, see [Autosave](/docs/guides/sessions#autosave). |
+| `Full` | Remove something first, see [Size](/docs/limits#size). |
+| `Invalid` | A bug in the calling code. Ledger warns with the field, see [What you can store](/docs/concepts/the-fold#what-you-can-store). |

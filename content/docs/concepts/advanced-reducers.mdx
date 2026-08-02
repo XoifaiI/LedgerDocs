@@ -422,7 +422,7 @@ local function Reducer(State: Profile, Op: Ledger.Op): Profile?
 end
 ```
 
-Seven things in there are worth pointing at.
+Seven things in there need explaining.
 
 **The species is `Op.Species`, and the pet id is `Op.PetId`.** `Id` and `Kind` belong to Ledger, and
 `Op.Kind` here is already `"Hatch"`. Name your own fields something else or Ledger overwrites them
