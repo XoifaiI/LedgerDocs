@@ -44,26 +44,6 @@ and `Edit`. All four surfaces answer `Invalid` now, the same as `CommitOp` alrea
 `Ledger.HistoryEntry` is exported. `Store:History` always returned them and there was no way to name
 the type. Nothing changes if you were not asking for one.
 
-### Check your own reducers
-
-The entity store example in these docs was wrong until now. It kept members in a table keyed by
-UserId:
-
-```luau
-State.Members[Op.UserId] = true             -- wrong
-State.Members[tostring(Op.UserId)] = true   -- right
-```
-
-A table with only number keys is an array, and a UserId is a huge number, so that table is an array
-with millions of gaps. A datastore cannot store it. Each op passes on its own, so your writes keep
-working. The key then fails to compact and the log grows forever.
-
-The same example used `#State.Members` for a member cap. `#` gives `0` on a dictionary, so the cap
-never applied.
-
-If a table in your reducer has ids for keys, make them strings. See
-[What you can store](/docs/concepts/the-fold#what-you-can-store).
-
 ## 3.1.2
 
 Op ids got shorter, and there is a way to read the record on a key rather than the state it folds to.
