@@ -70,6 +70,7 @@ type Config<D> = {
 	read Balance: string?,
 	read Migrations: { Migration }?,
 	read Keys: KeysMode?,
+	read OnLoadFailed: ((Player: Player, Why: Reason) -> boolean)?,
 }
 ```
 

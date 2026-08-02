@@ -86,11 +86,19 @@ Ledger.Reason.Behind
 ## Ledger.UseMock
 
 ```luau
-Ledger.UseMock(Options: { Players: number?, Throttled: boolean? }?) -> Service
+Ledger.UseMock(Options: { Players: number?, CCU: number?, Throttled: boolean? }?) -> Service
 ```
 
-Points every store built after this call at an in memory datastore. `Players` sizes the request
-budget, `Throttled` defaults to true. See [Testing](/docs/guides/testing).
+Points every store built after this call at an in memory datastore.
+
+| Option | | |
+| --- | --- | --- |
+| `Players` | `number?` | How many on this server. Defaults to 0. Sizes the per server budget. |
+| `CCU` | `number?` | How many in the whole experience. Defaults to `Players`. Sizes the experience budget. |
+| `Throttled` | `boolean?` | Defaults to true. |
+
+Both budgets apply at the same time. The smaller one stops you first, the same as a real server. See
+[Testing](/docs/guides/testing).
 
 ## Ledger.UseReal
 
@@ -147,6 +155,7 @@ Ledger.KeysMode
 Ledger.TxLeg
 Ledger.Migration
 Ledger.Config<D>
+Ledger.HistoryEntry
 ```
 
 See [Types](/docs/reference/types).

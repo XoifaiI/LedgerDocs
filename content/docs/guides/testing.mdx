@@ -21,6 +21,21 @@ Call it before you build any stores. A store built against the real datastore st
 `Players` is how many players to size the request budget for, since Roblox's budget formula is a
 base plus a per player allowance. Set it to what a real server of yours looks like.
 
+There are two budgets. One is for this server and one is for the whole experience. `Players` sizes
+the first, `CCU` sizes the second, and `CCU` defaults to `Players`. The smaller one stops you first:
+
+```luau
+Ledger.UseMock({ Players = 30 })                --> 900 writes, 1260 reads, 65 lists
+Ledger.UseMock({ Players = 30, CCU = 10000 })   --> 1260 writes, 1260 reads, 65 lists
+```
+
+Leave `CCU` alone to test against the tighter of the two. Raise it to see what a server does once the
+experience budget is no longer the limit.
+
+`Service:GetRequestBudgetForRequestType` reports the per server budget only, the same as the real
+API. On the first line above, writes stop at 900 while it still reports 1260. Don't use it to decide
+whether you can write.
+
 `Throttled` defaults to true and is what makes the mock worth using. With it on you get real request
 budgets, real refill rates, real queueing, and a real throughput cap per key. Turn it off with
 `Throttled = false` when you're testing logic and don't want to wait around.

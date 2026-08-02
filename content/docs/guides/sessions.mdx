@@ -33,6 +33,16 @@ hanging around.
 
 `Unload` cancels the autosave timer, pushes everything queued, and yields until it's durable.
 
+A session you kept a reference to still answers after that. It refuses every write with
+[`Closed`](/docs/concepts/reasons):
+
+```luau
+Store:Unload(Player)
+Session:Apply("Add", { Amount = 1 })   --> false, "Closed"
+```
+
+`Ledger.CloseAll()` releases every session, so the same applies after a shutdown.
+
 ## Getting the session
 
 There are four ways, and which one you want depends on whether you can cope with it not being there.
@@ -52,6 +62,21 @@ the player left before it finished. This is the one for callbacks that fire duri
 There's also `Store:Read(Player)`, which gives you the state table directly or `nil`, for when you
 only want to look at something.
 
+```luau
+Store:IsLoaded(Player)        --> false
+Store:Get(Player)             --> nil
+Store:Expect(Player)          --> throws, data for Name is not loaded
+
+Store:Load(Player)
+
+Store:IsLoaded(Player)        --> true
+Store:Read(Player)            --> { Gold = 0 }
+```
+
+These seven take the `Player`: `Load`, `Unload`, `Get`, `Expect`, `IsLoaded`, `WaitForLoaded` and
+`Read`. Every other method takes a key, so pass `Player.UserId`. `Store:Peek(Player)` throws and says
+what it wanted.
+
 ## Autosave
 
 Every session autosaves on a 30 second timer. It pushes queued ops, and if the log has gotten long
@@ -65,6 +90,14 @@ where ops start piling up, and if it keeps going you'll start seeing
 
 `Session.LogSize` is how many ops are in the stored log, and `Session.LogBytes` is roughly how many
 bytes those ops plus the queued ones take. Both are read only and mostly useful for a debug readout.
+
+A queued op counts in `LogBytes` but not in `LogSize`, because it is not in the stored log yet:
+
+```luau
+Session.LogSize, Session.LogBytes   --> 0, 0
+Session:Apply("Add", { Amount = 5 })
+Session.LogSize, Session.LogBytes   --> 0, 54
+```
 
 You don't need to watch them. Autosave compacts on its own. `Session:Compact()` is there if you want
 to force it, like right before you do something that's about to write a lot.

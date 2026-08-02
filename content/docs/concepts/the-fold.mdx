@@ -64,5 +64,17 @@ accident and Ledger puts them back. Write your own values into them and you can 
 
 Whatever a datastore can hold, so JSON. Tables, strings, numbers, booleans. No Instances, no
 Vector3, no functions, no cyclic tables, no tables that mix array and dictionary keys, no NaN or
-inf. Ledger checks this on the way in and refuses the op with
+inf. Buffers are fine. Ledger checks this on the way in and refuses the op with
 [`Invalid`](/docs/concepts/reasons) instead of letting the save fail later.
+
+Use string keys for ids:
+
+```luau
+State.Owners[Op.UserId] = true              -- an array with millions of gaps
+State.Owners[tostring(Op.UserId)] = true    -- a dictionary
+```
+
+A table with only number keys is an array, and an array with gaps cannot be stored. Ledger checks
+each op on its own, and each op passes, so nothing goes wrong at first. The key then fails to compact
+and Ledger warns you that your reducer built state a datastore cannot hold. If a number is a name,
+make it a string.

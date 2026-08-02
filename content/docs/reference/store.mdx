@@ -148,7 +148,10 @@ Store:Tx(Id: string, Legs: { TxLeg }) -> Future<boolean, Reason?>
 ```
 
 Commits 2 to 4 legs all or nothing. `Id` comes first and is required, 1 to 50 characters, and has to
-be stable across retries.
+be stable across retries. Running the same id again answers `true` and moves nothing.
+
+A leg's shape throws, so a bad key, a duplicate key, a `Once` on a leg. A leg's `Fields` answer
+[`Invalid`](/docs/concepts/reasons) instead, the same as `Edit`, and nothing is prepared when they do.
 
 See [Transactions](/docs/guides/transactions).
 

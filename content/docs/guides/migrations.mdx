@@ -62,6 +62,31 @@ Ledger keeps track of the last step that wasn't compatible. Any record at or abo
 read by an older server. Anything below it can't, and the old server answers
 [`Behind`](/docs/concepts/reasons) instead of guessing.
 
+```luau
+-- new build, two migrations, the first of them not compatible
+Version = 2, Floor = 1
+
+-- old build with one migration reads it
+Store:Peek(UserId):Wait()   --> nil, "Behind"
+Store:Reset(UserId):Wait()  --> false, "Behind"
+```
+
+The version sits on the snapshot, so a key gets one the first time it compacts. Before that the
+record is only ops, and an older server reads it normally.
+
+A write from that older server answers differently:
+
+```luau
+Store:Edit(UserId, "Add", { Amount = 5 }):Wait()   --> false, "Unresolved"
+```
+
+The op reaches the log before anything folds it, so the write did happen. This server cannot read the
+record back to see what it folded to. `Unresolved` says that. A newer server folds the op, and the
+deploy clears it.
+
+An older server can never compact one of these records, so it can never write a snapshot in the old
+shape.
+
 `Behind` is the one reason it's pointless to retry, because it isn't about the datastore. It says
 this server is running an older build than the one that wrote the record, and it clears when the
 deploy finishes. Never fall back to a fresh profile on `Behind`, the stored data is fine and writing

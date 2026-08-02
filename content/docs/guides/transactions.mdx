@@ -20,12 +20,53 @@ isn't.
 ## The id
 
 The id comes first and it's required. It has to be a stable name derived from the thing you're
-settling, so a trade id, an order id, a match id. Never build it from the clock or a fresh GUID.
+settling, so a trade id, an order id, a match id. Never build it from the clock, and never mint one
+inside the `Tx` call.
 
-That's what makes a retry safe. Running the same transaction id again doesn't do it twice, you get
-`Spent` back instead, which means it already ran. Treat that as success.
+That's what makes a retry safe. Running the same id again doesn't do it twice. It finds every leg
+already settled and answers `true` having moved nothing, so an `Unresolved` you want to chase is just
+the same call again:
+
+```luau
+local Ok, Why = Store:Tx(`trade:{TradeId}`, Legs):Wait()
+if Why == Ledger.Reason.Unresolved then
+	Ok, Why = Store:Tx(`trade:{TradeId}`, Legs):Wait()
+end
+```
 
 Ids are 1 to 50 characters.
+
+### Where the id comes from
+
+Two of the three you get handed, one you have to invent.
+
+**A purchase** gives you `ReceiptInfo.PurchaseId`. Roblox keeps calling `ProcessReceipt` with the same
+one until you return `PurchaseGranted`, so it survives a server restart as well as a retry.
+
+**A trade** gives you nothing, so mint the id when the trade opens rather than when it commits:
+
+```luau
+local function OpenTrade(A: Player, B: Player)
+	return {
+		Id = HttpService:GenerateGUID(false),   -- once, here
+		A = A,
+		B = B
+	}
+end
+
+-- later, when both sides confirm
+Store:Tx(`trade:{Trade.Id}`, Legs):Wait()
+```
+
+A GUID is fine there because it's minted once and held. What breaks is generating one inside the `Tx`
+call, since every retry would be a new transaction and apply the money again.
+
+**Anything from outside**, a webhook or your own website, should use the sender's order id. They're
+the ones who retry, so their id is the one that stays the same when they do.
+
+The rule underneath all three: the id has to live at least as long as whatever might retry it. For a
+purchase Roblox holds it. For a trade only the hosting server would retry, so that server's memory is
+enough. If you can't name what would retry, you don't need a durable id at all.
 
 ## The legs
 
@@ -49,6 +90,28 @@ than something it tries to merge.
 
 Don't put `Once` on a leg. The transaction id already makes every leg land at most one time, and
 Ledger throws if it sees one.
+
+### What throws and what answers
+
+The shape of a leg is your code, so getting it wrong throws where you wrote it. A key the target
+store won't take, a missing or oversized id, the wrong number of legs, the same key twice, a `Once`
+on a leg, a `Store` that Ledger didn't build.
+
+What's *in* `Fields` is data, so it answers instead:
+
+```luau
+local Ok, Why = Store:Tx(`trade:{TradeId}`, {
+	{ UserId = A, Kind = "Give", Fields = { Amount = Price * Quantity } },
+	{ UserId = B, Kind = "Take", Fields = { Amount = Price * Quantity } }
+}):Wait()
+
+if Why == Ledger.Reason.Invalid then
+	-- a field can't be stored, so an Instance, a NaN from that multiply, a reserved name
+end
+```
+
+That's the same split `Edit` uses, and the same [`Invalid`](/docs/concepts/reasons). Nothing is
+prepared on any key when it happens, so there's nothing to clean up.
 
 ## How it decides
 

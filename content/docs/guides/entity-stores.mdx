@@ -7,23 +7,27 @@ A store with `Keys = "String"` isn't about players. The keys are names you pick,
 underneath belongs to nobody in particular.
 
 ```luau
+local MAX_MEMBERS = 50
+
 local Clans = Ledger.New({
 	Name = "Clans",
 	Keys = "String",
-	Default = { Members = {}, Treasury = 0, Level = 1 },
+	Default = { Members = {}, Count = 0, Treasury = 0, Level = 1 },
 	Balance = "Treasury",
 	Reducer = function(State, Op)
 		if Op.Kind == "Join" then
-			if State.Members[Op.UserId] then
+			local Who = tostring(Op.UserId)
+			if State.Members[Who] then
 				return nil
 			end
-			if #State.Members >= 50 then
+			if State.Count >= MAX_MEMBERS then
 				return nil
 			end
 
 			local Next = table.clone(State)
 			Next.Members = table.clone(State.Members)
-			Next.Members[Op.UserId] = true
+			Next.Members[Who] = true
+			Next.Count += 1
 			return Next
 		end
 
@@ -31,6 +35,16 @@ local Clans = Ledger.New({
 	end,
 })
 ```
+
+Two lines in there are easy to get wrong.
+
+**`tostring(Op.UserId)`, not `Op.UserId`.** A table with only number keys is an array. A UserId is a
+huge number, so `Members` becomes an array with millions of gaps. A datastore cannot store that.
+Ledger checks each op on its own, and each op passes, so the writes keep working. The key then fails
+to compact and the log grows forever. String keys make `Members` a dictionary.
+
+**`State.Count`, not `#State.Members`.** `#` gives `0` on a dictionary, so the cap never applies. The
+clan above fills to sixty.
 
 This is where not having a lock matters most. Twenty servers can be writing to the same clan at the
 same time, and the fold decides the membership cap the same way on all of them. There's no owner

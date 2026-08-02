@@ -132,3 +132,55 @@ It stops the double click, and it stops a retry minutes or days later. It does n
 ticket being fulfilled again months later, because the name is only remembered for a rolling 30 days.
 If a reopened ticket has to stay fulfilled for good, record that in the state your reducer can see
 and refuse on it there. See [how long a name is remembered](/docs/concepts/once#how-long-a-name-is-remembered).
+
+## Editing storage directly
+
+A datastore editor plugin shows you Ledger's record, not the player's data:
+
+```luau
+{
+	Snapshot = { Gold = 100 },   -- the state as of the last compaction
+	Ops = { ... },               -- changes since then, not folded in yet
+	Seen = { ... },              -- op ids already applied
+	Version = 3, Floor = 1, Envelope = 1
+}
+```
+
+The number someone came looking for is inside `Snapshot`, and on its own it is not the current value,
+because everything in `Ops` still replays over it.
+
+<Callout type="warn">
+  Replacing the value with a plain state table wipes the player. With no `Snapshot` field, Ledger
+  folds from your `Default` and reads them as a brand new profile. What you typed sits on the record
+  as a field nothing looks at, until the next compaction drops it.
+</Callout>
+
+The rest, in the order they cost you:
+
+- **Editing `Snapshot` while `Ops` has anything in it.** Your edit goes in, then the ops replay over
+  the top. Set gold to 1000 with a pending spend of 50 and the fold answers 950.
+- **Deleting `Seen`.** That is the dedupe window for ops already compacted away, so an old retry can
+  apply a second time.
+- **Removing an op that has a `Tx` field.** That is a parked [transaction](/docs/guides/transactions)
+  leg. The marker still counts it, so the transaction can half apply or sit stuck until it is reaped.
+- **Clearing `_Held` or `_Received` inside `Snapshot`.** `_Held` is money set aside for a transfer
+  that has not finished, so deleting it destroys that money. `_Received` is the delivery evidence, so
+  deleting it lets the same transfer pay twice.
+- **Raising `Envelope`** is the one safe mistake. Every server answers
+  [`Behind`](/docs/concepts/reasons) and refuses to touch the record rather than misreading it.
+
+Use the api instead. It goes through your reducer and the log rather than around them, and it works
+whether or not the player is online or on this server:
+
+```luau
+Store:Inspect(UserId):Wait()   -- see what is actually on the key first
+Store:Edit(UserId, "GrantItem", { Item = "Sword", Once = `support:{TicketId}` }):Wait()
+Store:Reset(UserId):Wait()     -- back to Default, keeping _Received and _Held
+```
+
+`Reset` keeps the two reserved fields, which hand editing would not. `Once` makes the double click
+safe.
+
+One last thing if you do edit storage. A live session does not see it until its next autosave refold,
+so up to 30 seconds, and the ops it has already queued were worked out against the state before your
+edit.

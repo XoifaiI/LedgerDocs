@@ -60,8 +60,8 @@ When it's a retry of the same logical transfer, name it:
 local Ok, Why = Store:Transfer(From, To, 250, `trade:{TradeId}`):Wait()
 ```
 
-Now a second call with that id doesn't move anything again. You get `Spent` back, which means it
-already happened. Treat `Spent` as success.
+Now a second call with that id doesn't move anything again. You get `true` back, because the transfer
+already went through. That's the answer to retry on, and it stays `true` however many times you ask.
 
 Ids are 1 to 64 characters. Derive them from the thing being paid for, so a trade id or an order id,
 never from the clock.
@@ -70,9 +70,12 @@ never from the clock.
 
 `true` means the money moved and both sides are settled.
 
-`Refused` means the sender didn't have it, or the amount wasn't a positive finite number.
+`Refused` means the sender didn't have it. An amount that isn't positive and finite throws at the call
+site instead, because that's a bug in the caller rather than an answer about the money.
 
-`Spent` means this id already moved. The money is where it should be.
+`Spent` means the hold sat there long enough to expire and the money went **back to the sender**.
+Nothing moved and that id is finished, so don't hand anything over on it. A transfer that actually
+went through answers `true`, not this.
 
 `Busy` means a transaction is holding the sender's key. Ledger has already scheduled a cleanup pass,
 try again shortly.

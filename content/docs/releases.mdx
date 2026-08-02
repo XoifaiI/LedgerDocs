@@ -5,19 +5,75 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 3.2.0
+
+Everything that could fail now answers the same way, whichever door you came through.
+
+```diff
++ Flush, Compact and Release name the reason they failed
++ Store:Resettle is part of the api, and handles its key like every other method
++ Ledger.HistoryEntry is exported, so a Store:History result can be typed
+
+! Store:Resettle hands back a Future now, so it needs :Wait()
+! Tx answers Invalid for a leg field it cannot store, it used to throw
+! A Once name that is empty or not a string answers Invalid, it used to throw
+```
+
+### Upgrading
+
+`Flush`, `Compact` and `Release` return a reason next to the boolean. The boolean means what it
+always meant, so you can ignore the reason and change nothing. See
+[Session](/docs/reference/session#flush).
+
+`Resettle` needs a change if you were calling it. It was reachable before but never declared, and it
+took a key string through without checking it. It is on `Store` now. It resolves the key the way
+`Peek` and `Edit` do, so a bad one throws where you wrote it, and it answers
+`Future<boolean, Reason?>`. Add `:Wait()`. `true` means nothing is left unfinished on the key. `Busy`
+means a transaction leg is still waiting on a decision, so try again later. See
+[Resettle](/docs/reference/store#resettle).
+
+`Tx` used to throw when a leg's `Fields` held something a datastore can't take. It answers
+[`Invalid`](/docs/concepts/reasons) now, the same as `Edit` already did for the same content. Leg
+fields are usually calculated, so `Fields = { Amount = Price * Count }` can produce a NaN, and that
+used to crash the caller. If you wrapped `Tx` in a `pcall` for this, read the reason instead. The
+shape of a leg still throws, so a bad key, a duplicate key or a `Once` on a leg is unchanged.
+
+`Once` moved for the same reason. You pass it in `Fields`, and a name almost always comes from
+outside your game. A receipt id or an order id that arrives as `nil` used to crash `Apply`, `Commit`
+and `Edit`. All four surfaces answer `Invalid` now, the same as `CommitOp` already did. See
+[Once](/docs/concepts/once#rules).
+
+`Ledger.HistoryEntry` is exported. `Store:History` always returned them and there was no way to name
+the type. Nothing changes if you were not asking for one.
+
+### Check your own reducers
+
+The entity store example in these docs was wrong until now. It kept members in a table keyed by
+UserId:
+
+```luau
+State.Members[Op.UserId] = true             -- wrong
+State.Members[tostring(Op.UserId)] = true   -- right
+```
+
+A table with only number keys is an array, and a UserId is a huge number, so that table is an array
+with millions of gaps. A datastore cannot store it. Each op passes on its own, so your writes keep
+working. The key then fails to compact and the log grows forever.
+
+The same example used `#State.Members` for a member cap. `#` gives `0` on a dictionary, so the cap
+never applied.
+
+If a table in your reducer has ids for keys, make them strings. See
+[What you can store](/docs/concepts/the-fold#what-you-can-store).
+
 ## 3.1.2
 
-Op ids got shorter, there is a way to read the record on a key rather than the state it folds to, and
-the last few methods that answered a bare `false` now say why.
+Op ids got shorter, and there is a way to read the record on a key rather than the state it folds to.
 
 ```diff
 + Buffers can live in state and in ops
 + Store:Inspect, the record on a key rather than the state it folds to
 + Op ids named after the server and counted, half the length of the old ones
-+ Flush, Compact and Release name the reason they failed
-+ Store:Resettle is part of the api, and handles its key like every other method
-
-! Store:Resettle hands back a Future now, so it needs :Wait()
 ```
 
 ### Upgrading
@@ -30,17 +86,6 @@ than writing into the one your reducer was handed. See
 Op ids changed shape and nothing has to be done about it. An id is opaque, compared only for equality,
 so ids written by older builds keep working next to the new ones and there is no migration. If you
 were reading op ids expecting a GUID, they now look like `3c404902bf6a4a4e:41`.
-
-`Flush`, `Compact` and `Release` return a reason next to the boolean. Ignoring it is fine and the
-boolean means what it always meant, so nothing has to change. See
-[Session](/docs/reference/session#flush).
-
-`Resettle` is the one to look at. It was reachable before but never declared, and it took a key
-string straight through without checking it. It is on `Store` now, it resolves the key the way `Peek`
-and `Edit` do so a bad one throws where you wrote it, and it answers `Future<boolean, Reason?>`. If
-you were calling it, add `:Wait()`. `true` means nothing is left unfinished on the key, `Busy` means a
-transaction leg is still waiting on a decision and it is worth another go later. See
-[Resettle](/docs/reference/store#resettle).
 
 ## 3.1.1
 

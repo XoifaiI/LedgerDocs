@@ -70,6 +70,20 @@ next one isn't until they rejoin.
 first one did. Every replay after it doesn't, and every replay after it is still a granted purchase.
 `DidApply` answers the question Roblox is actually asking.
 
+```luau
+Store:Edit(UserId, "ProductGrant", { ProductId = 123, Once = "receipt:abc" }):Wait()
+--> true, nil
+
+Store:Edit(UserId, "ProductGrant", { ProductId = 123, Once = "receipt:abc" }):Wait()
+--> false, "Refused"
+
+Store:DidApply(UserId, "receipt:abc"):Wait()
+--> true, nil
+```
+
+A replay answers `Refused`. Your reducer answers `Refused` too, so the boolean cannot tell you which
+one happened. `DidApply` can.
+
 **Check `Unresolved` first.** It means there's no settled answer yet, so `DidApply` might be reading
 a fold that a stuck transaction can still flip. Answer `NotProcessedYet` and let the retry ask again
 once things are settled.
@@ -135,6 +149,19 @@ the set. So a player who wanders off for two months and comes back to a receipt 
 retrying is fine: nothing was written while they were away, so nothing was swept, and the name is
 still sitting there.
 
+```luau
+Store:Edit(UserId, "Grant", { Once = "old" }):Wait()
+
+-- 40 days later, nothing written on the key in between
+Store:DidApply(UserId, "old"):Wait()          --> true
+Store:Edit(UserId, "Grant", { Once = "old" }):Wait()   --> false, "Refused"
+
+-- one new name is written, which sweeps everything past the window
+Store:Edit(UserId, "Grant", { Once = "fresh" }):Wait()
+Store:DidApply(UserId, "old"):Wait()          --> false
+Store:Edit(UserId, "Grant", { Once = "old" }):Wait()   --> true, it applies again
+```
+
 What it does not cover is a receipt still unsettled after 30 days of the same player buying other
 things. That means a month of your grant failing every time, which is a bigger problem than the
 dedupe.
@@ -151,7 +178,9 @@ owned. The `Once` name only stops the retries.
 
 ## Rules
 
-The name has to be a non empty string. Anything else and the commit is refused with `Invalid`.
+The name has to be a non empty string. Anything else is refused with
+[`Invalid`](/docs/concepts/reasons) on every surface, and nothing applies. A name usually comes from
+outside your game, so a receipt id that arrives as `nil` gives you a reason to read.
 
 Names are namespaced, so a `Once` name can't collide with a transfer id or a transaction id even if
 they're spelled the same.

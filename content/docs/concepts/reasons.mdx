@@ -31,12 +31,27 @@ Nothing changed. Retrying in a few seconds is reasonable.
 
 ## Spent
 
-The id you used has already been used. A transfer with that id already moved, or a transaction with
-that id already ran. This is the dedupe doing its job, and it usually means your retry worked the
-first time and you didn't hear back.
+That name is used up and nothing was applied.
 
-Nothing changed on this call, but the thing you asked for probably already happened. Treat it as
-success, not failure.
+For a transfer it means the money went **back to the sender**. The hold sat there long enough to
+expire and Ledger refunded it. The id is kept afterwards so a late retry can't pay out against a
+refund that already happened.
+
+For a transaction it means the name can't be used for what you asked. Either a live marker under that
+id names a different set of keys or a different amount, or an earlier attempt was cancelled part way.
+Ledger would rather refuse than half apply it.
+
+<Callout type="warn">
+  `Spent` is not success. Nothing moved, and for a transfer the money is back where it started. Handing
+  out the item on a `Spent` is how you pay for something that was refunded.
+</Callout>
+
+A retry that already went through answers `true`, not `Spent`. Calling `Transfer` again with an id
+that delivered, or `Tx` again with an id that committed, gives you `true` and moves nothing the second
+time. That is the answer that means "already happened".
+
+So on `Spent`, work out what you want to do about a name you can't reuse. Read the keys, pick a new
+id, or tell the player it didn't go through.
 
 ## Unresolved
 
@@ -69,8 +84,11 @@ Nothing changed. You need to remove something before you can add anything.
 ## Invalid
 
 The op can't be stored. Something in the fields isn't JSON, so an Instance, a function, a cyclic
-table, a table mixing array and dictionary keys, NaN, inf. Or your reducer handed back something
-that wasn't a table.
+table, a table mixing array and dictionary keys, NaN, inf. Or the fields use a name Ledger reserves,
+or the kind starts with `__`. Or your reducer handed back something that wasn't a table.
+
+`Edit`, `Apply`, `Commit` and `Tx` all answer this the same way, and for `Tx` it means one of the
+legs, so nothing was prepared on any key.
 
 Nothing changed. This is a bug in the calling code, and Ledger warns with the specific field.
 
@@ -99,14 +117,12 @@ Most code only cares about two things: did it work, and can I retry.
 local Ok, Why = Store:Edit(UserId, "GrantItem", { Item = "Sword" }):Wait()
 
 if Ok then
-	-- it went through
-elseif Why == Ledger.Reason.Spent then
-	-- it already went through on an earlier try
+	-- it went through, and a retry under the same id would answer true again
 elseif Why == Ledger.Reason.Unresolved or Why == Ledger.Reason.Busy then
-	-- no answer yet, ask again later
+	-- no answer yet, ask again later with the same id
 else
-	-- Refused, Closed, Backlog, Full, Invalid, Behind:
-	-- it didn't happen and asking again won't help
+	-- Refused, Spent, Closed, Backlog, Full, Invalid, Behind:
+	-- it didn't happen, and asking again with this id won't change that
 end
 ```
 

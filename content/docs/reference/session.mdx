@@ -32,7 +32,13 @@ Roughly how many bytes the stored ops plus the queued ones take. Read only.
 Session:Get() -> S
 ```
 
-Live state. It's deep frozen, so a mutation throws on the line that did it.
+Live state. Every table in it is frozen, at every depth, so a mutation throws on the line that did it:
+
+```luau
+local State = Session:Get()
+State.Gold = 99                --> attempt to modify a readonly table
+State.Bag.Items[1] = "sword"   --> attempt to modify a readonly table
+```
 
 ### Observe
 
@@ -49,7 +55,8 @@ Session:Observe():Subscribe(function(State)
 end)
 ```
 
-This is the session's own stream, not a copy, so don't `Destroy` it. See
+This is the session's own stream, not a copy, so `Session:Observe() == Session:Observe()`. `Destroy`
+on it removes Ledger's own subscribers too, so don't call it. See
 [Observer](/docs/reference/observer) for the chain methods and cleanup.
 
 ### DidApply
@@ -132,5 +139,9 @@ log gets long, so you rarely need it.
 Session:Release() -> Future<boolean, Reason?>
 ```
 
-Marks the session closed and pushes what's left. `Store:Unload` calls this for you, and calling it
-yourself is unusual. Every write afterwards answers [`Closed`](/docs/concepts/reasons).
+Marks the session closed and pushes what's left. `Apply`, `Commit` and `CommitOp` then answer
+[`Closed`](/docs/concepts/reasons). `Flush` still works, it adds no op.
+
+Use `Store:Unload` instead. `Release` closes the session and tells the store nothing, so `IsLoaded`
+stays `true`, `Get` still hands back the closed session, and the autosave timer keeps running.
+`Unload` does both halves.
