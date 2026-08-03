@@ -21,10 +21,10 @@ description: What changed, and what you have to change with it.
 - Keys of few but very large ops never compacting
 - A refused transfer using up its name
 - State that was frozen at the top level but writable underneath
+- A buffer in Default being shared by every key that had not stored one yet
 - Recovery gaps around parked transactions and cleared delivery evidence
 - A build time warning about migrations that was wrong for every rename
 
-! Ledger.New refuses a Default that holds a buffer
 ! ClearDelivered keeps a delivery id for 30 days, it used to drop it after 8
 ! A Once name that is empty or not a string answers Invalid, it used to throw
 ! Store:RecoverTransfers answers false when it could not take every held transfer
@@ -41,10 +41,6 @@ Handle the new reasons. `Session:Apply` can answer [`Unresolved`](/docs/concepts
 [`Busy`](/docs/concepts/reasons) while a transaction is parked on the key, `Store:Edit` can answer
 [`Full`](/docs/concepts/reasons), and a bad `Once` name answers [`Invalid`](/docs/concepts/reasons)
 where it used to throw. Treat each the way you already treat that reason elsewhere.
-
-Take a buffer out of `Default` and build it in your reducer instead. `Ledger.New` refuses one now,
-because every key that has not stored a buffer yet reads the same `Default` and a buffer cannot be
-frozen. A buffer anywhere else in state is fine.
 
 Call `Store:RecoverTransfers` again while it answers [`Busy`](/docs/concepts/reasons). It handles 32
 held transfers a call and used to answer `true` regardless.

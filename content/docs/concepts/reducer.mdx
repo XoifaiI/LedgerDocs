@@ -70,10 +70,8 @@ Ledger copies them instead of sharing them, so writing into one can't reach anot
 session. It does still change the state you're holding, and the fold won't agree with itself
 afterwards. Build a new buffer instead of writing into the one you were given.
 
-`Default` can't hold a buffer, and `Ledger.New` refuses one. Every key that has not stored a buffer
-yet reads the same `Default`, and that one cannot be copied out of the way, so a single key writing
-into it would change what every other key reads. Leave the field out of `Default` and build the buffer
-in your reducer on the first op that needs it.
+A buffer in `Default` works, and each key gets its own copy. Ledger used to hand every key that had
+not stored one yet the same buffer, so one key writing into it changed what all of them read.
 
 Don't freeze what you hand back. Ledger freezes it for you, all the way down. A table you froze
 yourself carries no promise about the tables inside it, so Ledger has to walk it in full, which costs
