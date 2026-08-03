@@ -56,8 +56,8 @@ end
 
 A timeout still bites, and so does any Future you build yourself. In both cases the missing first
 return is `nil`, which is falsy, so `if Ok then` and `if State == nil then` both do the right thing.
-You lose `Why` though. It comes back `nil` as well, so you can't tell a refusal from a timeout that
-way. Use `Happened` when you need to.
+You lose `Why` though. It comes back `nil` as well, so a timeout reads exactly like a failure.
+`Happened` answers `false` for both, so it cannot tell them apart either.
 
 ## Timeout
 
@@ -67,6 +67,13 @@ local Ok, Why = Store:Edit(UserId, "GrantItem", { Item = "Sword" }):Wait(10)
 
 After 10 seconds your thread resumes with no values. The work carries on in the background, it isn't
 cancelled, and if it finishes later the result is still there for a second `Wait`.
+
+<Callout type="warn">
+  Don't put a timeout on a write. `(nil, nil)` looks the same as a refusal, so a caller reads a
+  timeout as "it didn't happen" and asks again under a new name, which moves the money twice. The
+  timeout doesn't cancel the write either. Call `Wait()` with no timeout to get the real answer, and
+  let the [reason](/docs/concepts/reasons) tell you what happened.
+</Callout>
 
 ## Happened
 

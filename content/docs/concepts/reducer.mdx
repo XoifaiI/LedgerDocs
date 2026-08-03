@@ -70,6 +70,15 @@ Ledger copies them instead of sharing them, so writing into one can't reach anot
 session. It does still change the state you're holding, and the fold won't agree with itself
 afterwards. Build a new buffer instead of writing into the one you were given.
 
+`Default` can't hold a buffer, and `Ledger.New` refuses one. Every key that has not stored a buffer
+yet reads the same `Default`, and that one cannot be copied out of the way, so a single key writing
+into it would change what every other key reads. Leave the field out of `Default` and build the buffer
+in your reducer on the first op that needs it.
+
+Don't freeze what you hand back. Ledger freezes it for you, all the way down. A table you froze
+yourself carries no promise about the tables inside it, so Ledger has to walk it in full, which costs
+more than letting Ledger do the freezing.
+
 ## It has to not yield
 
 No `task.wait`, no `:Wait()`, no yielding datastore calls. Ledger runs the reducer inside a guard

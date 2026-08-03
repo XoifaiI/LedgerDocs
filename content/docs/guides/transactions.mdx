@@ -34,6 +34,11 @@ if Why == Ledger.Reason.Unresolved then
 end
 ```
 
+The legs have to match on every attempt. Ledger records what a name meant next to the name, so the
+same id run again for a different set of keys or a different amount answers
+[`Spent`](/docs/concepts/reasons) rather than `true`. That holds however long ago the first one ran.
+Pass the same legs on the retry and you get the `true` you are chasing.
+
 Ids are 1 to 50 characters.
 
 ### Where the id comes from

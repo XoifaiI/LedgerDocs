@@ -48,9 +48,14 @@ dropped, whichever kind of name it is.
 That sweep only rebuilds the set when something in it is actually old enough to go, so the usual
 write costs nothing.
 
-One entry is about 30 bytes when Ledger picked the id, more if you named the transfer yourself, so a
-rolling 30 day window is nowhere near the state cap for any real player. `ClearDelivered` drops
-delivered transfer ids outright if you want them gone sooner.
+One entry is about 40 bytes when Ledger picked the id, more if you named the transfer yourself, so a
+rolling 30 day window is nowhere near the state cap for any real player. An entry also carries a short
+fingerprint of what the name meant, which is what lets a name reused for a different amount answer
+[`Spent`](/docs/concepts/reasons) instead of `true`.
+
+`ClearDelivered` runs that sweep early. It cannot drop a delivery id sooner than 30 days, because a
+sender can ask for a refund up to that point and needs the evidence to know the delivery already
+happened.
 
 Naming your transfers `tip:8412` rather than after a random string keeps this set small.
 

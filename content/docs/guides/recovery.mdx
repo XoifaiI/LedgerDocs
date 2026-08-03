@@ -85,8 +85,13 @@ ordinary write clears it, so a player who rejoins and loads clears it on the spo
 of the key clears it too. Nobody is locked out of trading for 8 days. The window only runs its full
 length on a key nothing touches, and by the end of it no transfer can still be unfinished.
 
-The tombstone holds a timestamp and no player data. To remove the key outright, call `Erase` again
-after the 8 days.
+The tombstone holds a timestamp, your `Default`, and the applied names the key had built up. It holds
+no other player data. To remove the key outright, call `Erase` again after the 8 days.
+
+Keeping the names matters more than it sounds. `ProcessReceipt` retries until you answer
+`PurchaseGranted`, and Roblox can retry one you already granted. If an erase dropped the names, that
+retry would read as never granted and pay out a second time. So a read of an erased key comes back as
+a fresh profile, and a receipt already paid out is still refused.
 
 The refund to a turned away sender is not immediate. Their money stays set aside until the transfer
 is overdue, which is the same 8 days, and then the recovery sweep gives it back. Forcing

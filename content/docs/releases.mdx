@@ -5,16 +5,66 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 3.3.0
+
+```diff
++ A name reused for different terms answers Spent on Tx and Transfer, it used to answer true
++ Store:Edit answers Full when a key carries more unsaved ops than it can hold
++ Session:Apply answers Unresolved when a parked transaction could overturn the op
++ Session:Apply answers Busy when a parked transaction is holding the log open
++ The mock stores a buffer, so a game that packs its own bytes can test against it
++ Ledger.HistoryEntry is exported, so a Store:History result can be typed
++ A mutating reducer throws on the Edit and Tx paths too, it used to only throw on Apply
+
+- Reuse of a transfer or transaction name answering true and moving nothing
+- Reset restoring a payload no migration ever ran on
+- Keys of few but very large ops never compacting
+- A refused transfer using up its name
+- State that was frozen at the top level but writable underneath
+- Recovery gaps around parked transactions and cleared delivery evidence
+- A build time warning about migrations that was wrong for every rename
+
+! Ledger.New refuses a Default that holds a buffer
+! ClearDelivered keeps a delivery id for 30 days, it used to drop it after 8
+! A Once name that is empty or not a string answers Invalid, it used to throw
+! Store:RecoverTransfers answers false when it could not take every held transfer
+! Deploy every server before you rely on the new answers
+```
+
+### Upgrading
+
+Pass the same terms on a retry. A name that already ran now answers [`Spent`](/docs/concepts/reasons)
+if you ask again for different keys or a different amount, however long ago the first one ran. The same
+terms still answer `true` and still move nothing.
+
+Handle the new reasons. `Session:Apply` can answer [`Unresolved`](/docs/concepts/reasons) or
+[`Busy`](/docs/concepts/reasons) while a transaction is parked on the key, `Store:Edit` can answer
+[`Full`](/docs/concepts/reasons), and a bad `Once` name answers [`Invalid`](/docs/concepts/reasons)
+where it used to throw. Treat each the way you already treat that reason elsewhere.
+
+Take a buffer out of `Default` and build it in your reducer instead. `Ledger.New` refuses one now,
+because every key that has not stored a buffer yet reads the same `Default` and a buffer cannot be
+frozen. A buffer anywhere else in state is fine.
+
+Call `Store:RecoverTransfers` again while it answers [`Busy`](/docs/concepts/reasons). It handles 32
+held transfers a call and used to answer `true` regardless.
+
+Finish the deploy before you rely on the new answers. Records this build writes read fine on 3.2.0,
+which never expires their applied names, so that set grows until every server is upgraded. Nothing is
+lost and nothing applies twice.
+
+Everything else in this release is a fix you do not have to act on. `ClearDelivered` keeps a delivery
+id for 30 days rather than 8, so a busy receiver carries a slightly larger applied id set.
+
+
 ## 3.2.0
 
 ```diff
 + Flush, Compact and Release name the reason they failed
 + Store:Resettle is part of the api, and handles its key like every other method
-+ Ledger.HistoryEntry is exported, so a Store:History result can be typed
 
 ! Store:Resettle hands back a Future now, so it needs :Wait()
 ! Tx answers Invalid for a leg field it cannot store, it used to throw
-! A Once name that is empty or not a string answers Invalid, it used to throw
 ```
 
 ### Upgrading
@@ -35,14 +85,6 @@ means a transaction leg is still waiting on a decision, so try again later. See
 fields are usually calculated, so `Fields = { Amount = Price * Count }` can produce a NaN, and that
 used to crash the caller. If you wrapped `Tx` in a `pcall` for this, read the reason instead. The
 shape of a leg still throws, so a bad key, a duplicate key or a `Once` on a leg is unchanged.
-
-`Once` moved for the same reason. You pass it in `Fields`, and a name almost always comes from
-outside your game. A receipt id or an order id that arrives as `nil` used to crash `Apply`, `Commit`
-and `Edit`. All four surfaces answer `Invalid` now, the same as `CommitOp` already did. See
-[Once](/docs/concepts/once#rules).
-
-`Ledger.HistoryEntry` is exported. `Store:History` always returned them and there was no way to name
-the type. Nothing changes if you were not asking for one.
 
 ## 3.1.2
 

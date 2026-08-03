@@ -63,6 +63,11 @@ local Ok, Why = Store:Transfer(From, To, 250, `trade:{TradeId}`):Wait()
 Now a second call with that id doesn't move anything again. You get `true` back, because the transfer
 already went through. That's the answer to retry on, and it stays `true` however many times you ask.
 
+The amount and the receiver have to match on every attempt. A name that already went through, asked
+again for a different amount or a different key, answers [`Spent`](/docs/concepts/reasons). Ledger
+records what a name meant next to the name, so it can tell an honest retry from the same name being
+reused for something else.
+
 Ids are 1 to 64 characters. The id has to be the same string on every attempt, so make it once and
 keep it somewhere the retry can read it:
 

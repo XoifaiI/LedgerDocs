@@ -34,6 +34,9 @@ Ledger puts the key on the [recovery sweep](/docs/guides/recovery#sweeping), whi
 seconds. Your own retry usually gets there first, because every read and write settles what it finds
 pending on the key before doing anything else. Retry in a few seconds.
 
+`Session:Apply` also answers this when the key has hit its 1.5 MB op cap and a parked transaction is
+stopping it compacting. The datastore is fine. Retry once the transaction settles.
+
 ## Spent
 
 That name is used up and nothing was applied.
@@ -42,9 +45,15 @@ For a transfer it means the money went **back to the sender**. The hold sat ther
 expire and Ledger refunded it. The id is kept afterwards so a late retry can't pay out against a
 refund that already happened.
 
-For a transaction it means the name can't be used for what you asked. Either a live marker under that
-id names a different set of keys or a different amount, or an earlier attempt was cancelled part way.
-Ledger would rather refuse than half apply it.
+For a transaction it means the name can't be used for what you asked. Either that name already ran for
+a different set of keys or a different amount, or an earlier attempt was cancelled part way. Ledger
+would rather refuse than half apply it. A transfer answers `Spent` for the same reason, so asking
+again under a name that already went through, for a different amount or a different key, gets `Spent`
+instead of `true`.
+
+`Spent` says this attempt changed nothing. It does not promise the name can never work again. A name
+whose transaction was cancelled before any leg applied is free to use, and that is what lets a retry
+finish a cancelled attempt. A name that already moved money is done.
 
 <Callout type="warn">
   `Spent` is not success. Nothing moved, and for a transfer the money is back where it started. See
@@ -54,7 +63,11 @@ Ledger would rather refuse than half apply it.
 ## Unresolved
 
 Ledger doesn't know. Either the datastore call failed in a way that might still have written, or a
-transaction leg is stuck on the key and the fold can change once it settles.
+transaction leg is parked on the key and the fold can change once it settles.
+
+`Session:Apply` answers this when a transaction is parked and your op only holds if that transaction
+does not go through. Ledger folds both futures and only answers when they agree. Ask again once the
+transaction settles.
 
 `Unresolved` does not mean no, and it is the one that costs money if you treat it as a refusal. See
 [Unresolved](/docs/concepts/handling-failure#unresolved).
@@ -75,6 +88,10 @@ Nothing changed. This is a signal to stop writing and look at what's wrong, not 
 
 The profile is at the 2 MB cap and the op would make it bigger. Ledger lets ops through that shrink
 it, so a cleanup still works.
+
+`Store:Edit` answers this when the key already carries 1.5 MB of ops that have not been compacted
+away. That happens when a parked transaction is stopping the key compacting. It clears once the
+transaction settles.
 
 Nothing changed. You need to remove something before you can add anything.
 
