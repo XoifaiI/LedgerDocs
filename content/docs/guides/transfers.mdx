@@ -123,9 +123,9 @@ here for a support tool, or for a live incident where you want one key dealt wit
 
 <Callout type="warn">
   `Store:Erase(Key)` hands over any money the key was sending out. After that it turns away anything
-  sent to the key and answers `Refused`, so the sender gets it back instead of losing it. That lasts
-  until the next write on the key, or 8 days, whichever comes first. If the handover itself fails, it
-  warns with how much was lost and you'll have to pay the receivers back yourself. See
+  sent to the key and answers [`Held`](/docs/concepts/reasons), so the sender gets it back instead of
+  losing it. That lasts a full 8 days, and a write to the key does not cut it short. If the handover
+  itself fails, it warns with how much was lost and you'll have to pay the receivers back yourself. See
   [Erase](/docs/guides/recovery#erase).
 </Callout>
 

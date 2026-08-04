@@ -1,10 +1,10 @@
 ---
 title: Reasons
-description: The nine answers Ledger gives when something doesn't go through.
+description: The ten answers Ledger gives when something doesn't go through.
 ---
 
 Anything that can fail tells you why. Writes answer `(boolean, Reason?)` and reads answer
-`(value?, Reason?)`, and there are only nine reasons. They live on `Ledger.Reason`, so you can
+`(value?, Reason?)`, and there are only ten reasons. They live on `Ledger.Reason`, so you can
 compare against the constant instead of a string literal.
 
 ```luau
@@ -37,6 +37,10 @@ pending on the key before doing anything else. Retry in a few seconds.
 `Session:Apply` also answers this when the key has hit its 1.5 MB op cap and a parked transaction is
 stopping it compacting. The datastore is fine. Retry once the transaction settles.
 
+`Tx` does not retry a `Busy` for you. Every server retrying at once would pile more load onto a key
+that is already contended, so the backoff is yours to write. See
+[One key at a time](/docs/limits#one-key-at-a-time).
+
 ## Spent
 
 That name is used up and nothing was applied.
@@ -59,6 +63,15 @@ finish a cancelled attempt. A name that already moved money is done.
   `Spent` is not success. Nothing moved, and for a transfer the money is back where it started. See
   [Spent](/docs/concepts/handling-failure#spent).
 </Callout>
+
+## Held
+
+A transfer took the money and could not hand it over, because the receiving key was erased. This is
+not "nothing happened". The amount has left the sender and is set aside with them.
+
+Ledger gives it back on its own, and recovery follows that key until it does. Tell the sender their
+money is coming back rather than that the transfer failed. Don't send it again under a new name, or
+they pay twice.
 
 ## Unresolved
 

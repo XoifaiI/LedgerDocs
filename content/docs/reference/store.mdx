@@ -139,7 +139,102 @@ Moves `Amount` of the `Balance` field from one key to another. Needs the store t
 `From` and `To` have to be different. `Amount` has to be positive and finite. `Id` is 1 to 64
 characters when given, and giving one makes a retry safe.
 
+A delivery into a key that was erased answers [`Held`](/docs/concepts/reasons). The money left the
+sender and waits with them until recovery gives it back.
+
 See [Transfers](/docs/guides/transfers).
+
+### Reserve
+
+```luau
+Store:Reserve(Key: KeyLike, Field: string, Amount: number, Id: string, Options: {
+	Hold: number?,
+	To: KeyLike?
+}?) -> Future<boolean, Reason?>
+```
+
+Sets `Amount` of a numeric field aside on one key, under the name `Id`. The field drops by that much
+straight away, so nothing else can spend it. `Field` has to name a number field your `Default`
+declares. `Id` is 1 to 64 characters.
+
+Asking again under a name already set aside answers `true` and sets nothing aside a second time.
+Asking for more than the field holds answers `Refused`.
+
+`Hold` is how long to keep it, in seconds, and defaults to 15 minutes. It lives on the reservation
+itself, so two reservations on one key can be held for different lengths.
+
+`To` names the key the units are going to, which is what `Grant` needs. Leave it out for a reservation
+you will `Confirm` on the same key.
+
+A reservation nobody takes is given back once its hold runs out, either by the next `Reserve` on that
+key or by the recovery sweep.
+
+See [Reservations](/docs/guides/reservations).
+
+### Confirm
+
+```luau
+Store:Confirm(Key: KeyLike, Id: string) -> Future<boolean, Reason?>
+```
+
+Spends what `Id` set aside. The units are gone and the field stays where it is.
+
+Answers `false` if nothing is set aside under that name, so a confirm after a release cannot spend the
+same units twice.
+
+### Release
+
+```luau
+Store:Release(Key: KeyLike, Id: string) -> Future<boolean, Reason?>
+```
+
+Gives back what `Id` set aside. The field returns to where it was.
+
+### Grant
+
+```luau
+Store:Grant(Key: KeyLike, Id: string) -> Future<boolean, Reason?>
+```
+
+Hands what `Id` set aside to the key it was reserved `To`. The units are added there and the hold on
+this key is settled.
+
+Needs the reservation to name a `To`. One that doesn't answers `false`, and `Confirm` is what you
+want instead.
+
+Answers [`Held`](/docs/concepts/reasons) if the receiving key will not take the units, because it was
+erased or because the field there is no longer a number. The units stay set aside with the sender
+until recovery gives them back.
+
+Safe to call again. The receiving key remembers the name, so a second `Grant` adds nothing and
+answers `false`.
+
+A server that dies between the two writes leaves the units on both keys. Recovery reads the receiver
+before it gives anything back, so a reservation already handed over is settled rather than returned.
+
+### Bump
+
+```luau
+Store:Bump(Name: string, Field: string, Amount: number) -> Future<boolean, Reason?>
+```
+
+String keyed stores only. Adds `Amount` to a total spread over 16 keys, named `<Name>#0` to
+`<Name>#15`. Each server writes its own shard, so servers do not queue behind each other on one key.
+
+`Amount` has to be positive. A total is spread over keys that cannot see each other, so nothing can be
+taken back out of one. Anything with a limit belongs on a single key, where `Reserve` can hold it.
+
+### Total
+
+```luau
+Store:Total(Name: string, Field: string) -> Future<number?, Reason?>
+```
+
+Reads all 16 shards and adds them up. Costs 16 requests, so read it on a timer rather than per frame.
+
+It answers what has been added, not what the keys hold. Every shard starts at whatever your `Default`
+says the field is, and there are 16 of them, so that baseline is taken back off. A tally nobody has
+added to reads 0 whatever the `Default` is.
 
 ### Tx
 
@@ -164,6 +259,9 @@ Store:Reset(Key: KeyLike) -> Future<boolean, Reason?>
 Puts the key back to `Default`, keeping `_Received` and `_Held`. A record written at a version this
 server doesn't know answers [`Behind`](/docs/concepts/reasons) rather than `Refused`, because
 nothing turned the write down, this server just can't read what's there.
+
+A key with a transaction parked on it answers [`Busy`](/docs/concepts/reasons). Resetting it would
+throw away a leg the transaction still counts as committed. Settle it with `Resettle` first.
 
 ### Inspect
 
@@ -196,8 +294,14 @@ Store:Erase(Key: KeyLike) -> Future<boolean, Reason?>
 
 Throws the record away and leaves a tombstone. Hands over money this key was sending out first. For
 8 days the tombstone refuses anything sent to the key, so money still being sent returns to whoever sent it.
-Warns if the player is still in the server, because their session will write part of it back. See
-[Erase](/docs/guides/recovery#erase).
+See [Erase](/docs/guides/recovery#erase).
+
+The tombstone holds for the full 8 days even if the key is written to again. A session on another
+server knows nothing about the erase and keeps saving, and those writes no longer cancel the
+tombstone. Ledger warns when one arrives, because it means the player is still live somewhere. Get
+them off every server before erasing them.
+
+A key with a transaction parked on it answers [`Busy`](/docs/concepts/reasons), the same as `Reset`.
 
 `false` means the record is still there. Check it before you tell anyone their data is gone.
 

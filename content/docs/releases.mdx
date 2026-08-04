@@ -5,18 +5,71 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 3.4.0
+
+```diff
++ Store:Reserve, Confirm and Release set units of a numeric field aside on one key
++ Store:Grant hands units set aside on one key over to another
++ Store:Bump and Total keep a running count that many servers can add to at once
++ Held is a new reason, for units that left the sender and are on their way back
++ Tx costs 8 requests for 2 legs and 12 for 4, it used to be 10 and 16
+
+- During a deploy, an older build compacting a key and dropping a write the newer build had made
+- Erase and Reset throwing away a transaction leg the transaction still counted as committed
+- Any write to an erased key cancelling its tombstone, so money could be sent to it again
+- Transaction markers piling up until cleanup stopped running altogether
+- Markers for a transaction across two stores never being tidied by a server that builds only one
+- Session:Apply accepting an op that only holds if two parked transactions both go the same way
+- Sessions kept for the life of the server when a player left part way through loading
+
+! Every applied name ages out after 30 days now, transaction ids included
+! A transfer into an erased key answers Held, it used to answer Unresolved
+! Erase and Reset answer Busy while a transaction is parked on the key
+! An erased key keeps its tombstone for 8 days even if something writes to it
+! A session that loaded before an erase stops writing and closes itself, and says so
+! A Store:Edit your reducer refuses is no longer written to the log, so Inspect will not show it
+! A compacted record carries the size of its snapshot, which older builds carry along untouched
+! An idle session reads every 2 minutes rather than every 30 seconds
+! A large profile compacts a quarter as often, and folds up to 512 ops instead of 128
+! A build that cannot read a record refuses to write to it and answers Behind
+```
+
+The new methods are optional and nothing else depends on them. See
+[Reservations and totals](/docs/guides/reservations) for what they are for and when to use one instead
+of a transaction.
+
+### Upgrading
+
+Treat a `Transfer` that answers [`Held`](/docs/concepts/reasons) the way 3.3.0 told you to treat
+`Unresolved` on that path. The money left the sender and comes back on its own. `Held` says only that,
+where `Unresolved` also covers cases Ledger cannot answer at all.
+
+Get a player off every server before erasing them. A tombstone now holds for its full 8 days. A write
+no longer cancels it, and a session that loaded before the erase stops writing and closes itself.
+Ledger warns in both cases. Nothing resurrects an erased key any more.
+
+Derive transaction ids from the thing being settled. They age out after 30 days like every other
+name, so reusing one a month later applies it again. 3.3.0 kept them for good. That is what made the
+applied name set grow without bound on a key many transactions touch.
+
+Records this build writes read fine on 3.3.0 and the other way round. A compacted record now carries
+`Bytes`, the size of its snapshot. An ordinary write reads that rather than measuring the whole
+snapshot to decide whether the log is worth folding in. A build that does not know the field carries
+it along untouched, and one that does falls back to measuring when it is absent.
+
 ## 3.3.0
 
 ```diff
 + A name reused for different terms answers Spent on Tx and Transfer, it used to answer true
 + Store:Edit answers Full when a key carries more unsaved ops than it can hold
-+ Session:Apply answers Unresolved when a parked transaction could overturn the op
-+ Session:Apply answers Busy when a parked transaction is holding the log open
++ Session:Apply answers Unresolved or Busy when a parked transaction could change the answer
 + The mock stores a buffer, so a game that packs its own bytes can test against it
 + Ledger.HistoryEntry is exported, so a Store:History result can be typed
 + A mutating reducer throws on the Edit and Tx paths too, it used to only throw on Apply
 
 - Reuse of a transfer or transaction name answering true and moving nothing
+- A committed transaction applying a second time once its record aged out
+- Transfer calling it Refused while the money sat in escrow waiting to come back
 - Reset restoring a payload no migration ever ran on
 - Keys of few but very large ops never compacting
 - A refused transfer using up its name
@@ -26,6 +79,8 @@ description: What changed, and what you have to change with it.
 - A build time warning about migrations that was wrong for every rename
 
 ! ClearDelivered keeps a delivery id for 30 days, it used to drop it after 8
+! A transaction id is kept for good, transfer ids and Once names still age out at 30 days
+! A transfer into a key erased inside the tomb window answers Unresolved, it used to answer Refused
 ! A Once name that is empty or not a string answers Invalid, it used to throw
 ! Store:RecoverTransfers answers false when it could not take every held transfer
 ! Deploy every server before you rely on the new answers
@@ -45,12 +100,16 @@ where it used to throw. Treat each the way you already treat that reason elsewhe
 Call `Store:RecoverTransfers` again while it answers [`Busy`](/docs/concepts/reasons). It handles 32
 held transfers a call and used to answer `true` regardless.
 
+Treat a `Transfer` that answers [`Unresolved`](/docs/concepts/reasons) as money in flight, not money
+untouched. Sending into a key erased in the last 8 days used to answer `Refused`, which promises
+nothing changed. The amount is set aside and comes back on its own, so don't refund the player
+yourself and don't send it again under a new name.
+
 Finish the deploy before you rely on the new answers. Records this build writes read fine on 3.2.0,
 which never expires their applied names, so that set grows until every server is upgraded. Nothing is
 lost and nothing applies twice.
 
-Everything else in this release is a fix you do not have to act on. `ClearDelivered` keeps a delivery
-id for 30 days rather than 8, so a busy receiver carries a slightly larger applied id set.
+Everything else here is a fix you do not have to act on.
 
 
 ## 3.2.0

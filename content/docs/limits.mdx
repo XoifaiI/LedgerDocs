@@ -39,6 +39,16 @@ shrink it are still allowed, so a cleanup works when you're already over.
 Hitting the unsaved caps gives you [`Backlog`](/docs/concepts/reasons), and in practice that only
 happens when the datastore is down.
 
+Ledger keeps three tables of its own in the state, and they clear on different rules:
+
+| | Holds | Clears after |
+| --- | --- | --- |
+| `_Received` | names already applied | 30 days |
+| `_Held` | money set aside for a transfer | 7 days to deliver, 8 to give back |
+| `_Booked` | units set aside on the key | the reservation's hold, 15 minutes by default |
+
+None of them grows with uptime. Each is bounded by how much happened inside its own window.
+
 ## Applied names
 
 The set of applied ids lives in the state, so it counts against the state cap. It does not grow
@@ -75,6 +85,49 @@ for two minutes.
 A transaction is considered dead after 60 seconds, so another server will abort it on the original's
 behalf. Committed markers get tidied up in the background about an hour later.
 
+A transaction id ages out after 30 days, the same as every other name. A transaction lives at most an
+hour, so 30 days covers the whole protocol many times over. What it does not cover is you reusing the
+same id a month later, which applies it again. Derive ids from the thing being settled and they are
+never reused.
+
+### One key at a time
+
+A key takes one transaction at a time. While a leg is parked on it, every other transaction touching
+that key answers [`Busy`](/docs/concepts/reasons) and stops. `Tx` does not retry a `Busy` for you,
+because every server retrying at once would multiply the load on a key that is already contended.
+
+Retry it yourself with a short backoff. Measured against the mock, 8 servers depositing into one bank
+key all get through in about 3 attempts each. 32 servers take about 8 attempts each, and the cost per
+successful transaction goes from 10 requests to over 100.
+
+Plan around this for anything every player writes to, so a guild bank, a global shop, or an event pot.
+Spread the writes across keys where you can, for example one key per guild rather than one for all of
+them. Correctness never suffers from contention, only throughput.
+
+### What an operation costs
+
+Measured on the mock, for the path where nothing fails.
+
+| operation | datastore requests |
+| --- | --- |
+| `Peek`, `Edit`, `Bump` | 1 |
+| `Reserve`, `Confirm`, `Release` | 1 |
+| `Grant` | 3 |
+| `Transfer` | 3 |
+| `Tx`, 2 legs | 8 |
+| `Tx`, 4 legs | 12 |
+| `Total` | 16 |
+
+A transaction costs 4 requests on its marker whatever the leg count, which is why the two leg case is
+the one worth avoiding. A limit that lives on one key is a reservation, not a transaction. See
+[Reservations and totals](/docs/guides/reservations).
+
+Roblox gives an experience `UpdateAsync` budget of `300 + 20 per CCU` a minute, which works out at
+about 20 writes per player per minute at any real player count. So a player can average roughly 6
+transfers or 2 two leg transactions a minute across the whole experience, before autosave takes its
+share. Autosave itself is cheap and does not scale with how busy a player is, see
+[Timing](#timing).
+
 ## Transfers
 
 A stranded transfer is redriven for 7 days. After that it expires and refunds. Delivered ids stay in
@@ -82,11 +135,46 @@ the receiver's applied set for 30 days so a late retry can't pay twice.
 
 Recovery handles up to 32 holds per pass, so a key with a lot stranded takes a few passes.
 
+## Reservations and totals
+
+A reservation lasts 15 minutes by default, not the 30 days an applied name lasts. `Hold` sets the time
+per reservation, so a slow checkout can ask for longer without making every reservation wait.
+
+Two things clear the ones that ran out. The next `Reserve` on that key clears every one of them at
+once. The recovery sweep clears 32 a pass, so a key nobody reserves again takes a few minutes to drain.
+
+That means only the reservations open right now take up room. One is about 55 bytes, so the state cap
+is about 37,000 open at the same time on one key. A 15 minute window makes that hard to reach.
+
+The hold lives on the reservation, not in the store options. Every server then folds the same log the
+same way, whatever it is configured with.
+
+The recovery sweep settles up to 32 overdue reservations a pass on one key. A key with a lot of them
+takes a few passes. Each one that names a `To` costs a read of that key, because one already handed
+over has to be settled rather than given back.
+
+A total is spread over 16 keys. `Total` reads all 16, so it costs 16 requests. `Bump` costs one.
+
+See [Reservations and totals](/docs/guides/reservations).
+
 ## Timing
 
 Autosave runs every 30 seconds per session, and compacts as well when the log has gotten long.
 
+A session with nothing queued and no transaction parked on it reads every fourth turn. An idle player
+then costs one request every two minutes rather than one every 30 seconds. It writes as soon as there
+is anything to write. Only the check for what other servers did waits.
+
 An autosave is skipped when the server is under 4 requests of write budget, and it warns.
+
+## Compaction
+
+The log is folded into the snapshot once it is worth rewriting the record. The snapshot size decides
+when. A small profile compacts every 128 ops. A large one waits until the log is a fifth of the
+snapshot. Nothing waits past 512 ops.
+
+A big profile is expensive to rewrite, so rewriting it every 128 ops costs more than carrying them. A
+small one is cheap to rewrite, and folding fewer ops keeps loads fast.
 
 ## Versions
 

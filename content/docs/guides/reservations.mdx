@@ -1,0 +1,166 @@
+---
+title: Reservations and totals
+description: Holding a limit on one key, and counting something a lot of servers write to.
+---
+
+Two problems look like they need a transaction and don't.
+
+The first is a limit: 500 copies of a sword, 40 raid places, one seat per table. The second is a
+total: an event pot, a kill counter, a donation tally.
+
+Both are cheaper and simpler on a single key than across two, and each has its own tool.
+
+## Reserve, Confirm, Release
+
+A reservation sets units of a number field aside on one key. While they are set aside, nothing else
+can spend them, and the field already reads lower.
+
+```luau
+local Shop = Ledger.New({
+	Name = "Shop",
+	Keys = "String",
+	Default = { Stock = 500 },
+	Reducer = Reducer
+})
+
+local Ok = Shop:Reserve("sword", "Stock", 1, OrderId):Wait()
+if not Ok then
+	Tell(Player, "sold out")
+	return
+end
+```
+
+`Stock` is now 499 and one unit is held under `OrderId`. Two things can happen to it:
+
+```luau
+Shop:Confirm("sword", OrderId):Wait()   -- the unit is spent, stock stays at 499
+Shop:Release("sword", OrderId):Wait()   -- the unit goes back, stock returns to 500
+```
+
+Asking to reserve under a name that already holds something answers `true` and holds nothing extra,
+so a retry is safe.
+
+### Nobody has to clean up
+
+A reservation nobody confirms would hold its unit forever. The next `Reserve` on that key gives back
+anything older than 15 minutes, so the stock returns on its own.
+
+That means a busy key looks after itself and a quiet one does not. If a key gets one reservation a
+week, that reservation holds its unit until the next one arrives. Call `Release` when the player
+walks away and you never depend on it.
+
+## Handing the units to another key
+
+`Confirm` spends the units where they are. `Grant` moves them somewhere else.
+
+Name the destination when you reserve, then hand it over:
+
+```luau
+Shop:Reserve("sword", "Stock", 1, OrderId, { To = tostring(Player.UserId) }):Wait()
+Shop:Grant("sword", OrderId):Wait()
+```
+
+The units are added to the receiving key and the hold on the shop is settled, in that order. The
+receiving key remembers the name, so granting the same reservation twice adds nothing.
+
+A server that dies between the two writes leaves the units on both keys. Recovery reads the receiver
+before it gives anything back, so a reservation already handed over is settled rather than returned.
+Nothing is created and nothing is lost.
+
+If the receiving key was erased, `Grant` answers [`Held`](/docs/concepts/reasons) and the units stay
+set aside until recovery gives them back.
+
+## The buying sequence
+
+The order matters, because a server can die between any two calls. This order recovers from all of
+them:
+
+```luau
+Shop:Reserve("sword", "Stock", 1, OrderId, { To = tostring(Player.UserId) }):Wait()
+Bank:Transfer(Player.UserId, "shop", 250, OrderId):Wait()
+Shop:Grant("sword", OrderId):Wait()
+```
+
+Every step is idempotent under the same `OrderId`, so running the whole thing again after a crash
+lands exactly once. A transfer under a name that already moved answers finished, and a grant that
+already delivered adds nothing.
+
+Die before the payment and the reservation is given back on its own. Nothing was taken and nothing
+was handed over.
+
+<Callout type="warn">
+  Don't hand the item over yourself and settle the reservation afterwards. A crash in between gives
+  back stock you already sold, and you hand out more than you had. `Grant` does the two writes in the
+  order that recovers.
+</Callout>
+
+## Bump and Total
+
+A total is the other shape. Nothing is limited, a lot of servers add to it, and you want the sum.
+
+One key can only be written by one server at a time, so a key that every server writes spends its
+time retrying. `Bump` spreads the total over 16 keys and gives each server its own, so they stop
+queueing behind each other.
+
+```luau
+local Events = Ledger.New({
+	Name = "Events",
+	Keys = "String",
+	Default = { Gold = 0 },
+	Reducer = Reducer
+})
+
+Events:Bump("summerpot", "Gold", 25):Wait()
+
+local Pot = Events:Total("summerpot", "Gold"):Wait()
+```
+
+`Total` reads all 16 shards, so it costs 16 requests. Read it on a timer and cache it.
+
+`Total` answers what has been added, not what the 16 keys hold. Each one starts at whatever your
+`Default` says the field is, so that baseline is taken back off. A tally nobody has added to reads 0.
+
+### A total can only go up
+
+`Bump` refuses anything that is not positive. No shard can see the others, so no shard knows the sum,
+and nothing can hold a limit across them.
+
+That is the whole difference between the two tools. A reservation can hold a limit because everything
+is on one key. A total gives that up to get the writes.
+
+If you need both, split the stock into fixed pools and reserve against a pool. Each pool holds its
+own share, so the limit survives. One pool empties before another, so fall through to the next.
+
+## Which one, and when it really is a transaction
+
+| | |
+| --- | --- |
+| The limit is a property of one key | `Reserve` and `Confirm` |
+| Units held on one key end up on another | `Reserve` and `Grant` |
+| Add only, no limit, many servers | `Bump` |
+| A balance moves between two keys | [`Transfer`](/docs/guides/transfers) |
+| Two keys must change together and one change can't be undone | [`Tx`](/docs/guides/transactions) |
+
+The question that sorts them is what an undo would look like. If you can describe it, you want a
+reservation or a transfer. If the undo is asking the other player to give the sword back, you want a
+transaction.
+
+Trading a sword for a shield is a real transaction. Selling a sword from a shop is not.
+
+## What this costs
+
+Measured on the fake datastore, 100 limited stock purchases:
+
+| | Requests |
+| --- | --- |
+| A transaction across buyer and shelf | 800 |
+| Reserve and confirm | 201 |
+
+`Reserve`, `Confirm` and `Release` cost one request each. `Grant` costs three, because it reads the
+key holding the units before writing to both.
+
+A reservation is also a plain append, so it never answers `Busy` the way a transaction on a contended
+key does.
+
+Both are still one key, so 500 buyers still queue on the shelf. That queue is fast and never refuses,
+which the transaction version was not.

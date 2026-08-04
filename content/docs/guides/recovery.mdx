@@ -80,10 +80,12 @@ Money arriving is a different problem, because another server can be delivering 
 erase it. So an erase leaves a tombstone in place of the record instead of removing the key. Anything
 sent to a tombstoned key is refused and the sender keeps the money set aside.
 
-**The tombstone lasts until the next write on the key, or 8 days, whichever comes first.** Any
-ordinary write clears it, so a player who rejoins and loads clears it on the spot, and a transfer out
-of the key clears it too. Nobody is locked out of trading for 8 days. The window only runs its full
-length on a key nothing touches, and by the end of it no transfer can still be unfinished.
+**The tombstone lasts 8 days.** A write to the key does not clear it. That is the point: the erase
+has to outlast anything still in flight to the key, and a session on another server has no idea the
+erase happened. By the end of the window no transfer can still be unfinished.
+
+A key can still be written to and read while it holds a tombstone. It folds from `Default` like a
+fresh profile. Only money sent to it is turned away.
 
 The tombstone holds a timestamp, your `Default`, and the applied names the key had built up. It holds
 no other player data. To remove the key outright, call `Erase` again after the 8 days.
@@ -98,13 +100,21 @@ is overdue, which is the same 8 days, and then the recovery sweep gives it back.
 `RecoverTransfers` on the sender before that does nothing, on purpose: a refund paid early could
 still be delivered afterwards and pay twice.
 
-Erasing a player who's still in the server warns, because their live session will just write part of
-the record back on its next save. Unload them first:
+Erasing a player who's still in the server warns. Unload them first:
 
 ```luau
 Store:Unload(Player)
 Store:Erase(Player.UserId):Wait()
 ```
+
+A session on **another** server knows nothing about the erase, and it cannot bring the key back. A
+session is fenced to the tombstone as it stood when it took the key. Its writes are turned away and it
+closes itself. `Flush`, `Release` and `Commit` answer [`Refused`](/docs/concepts/reasons) rather than
+report a save that never happened.
+
+Whatever that session had queued dies with it, so get the player off every server before you erase
+them. Ledger warns on the erased key when a write arrives, which tells you somebody is still holding
+it.
 
 The erase is still a version, so `History` shows it and the data is recoverable through `PeekVersion`
 for 30 days. Roblox keeps that history whatever Ledger does, so know about it before you erase

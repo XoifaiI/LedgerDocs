@@ -17,6 +17,15 @@ If the buyer can't afford it, the seller doesn't lose the sword. If the seller d
 sword, the buyer doesn't lose the gold. There's no window where one of those is true and the other
 isn't.
 
+<Callout type="warn">
+  A transaction is the most expensive thing Ledger does, and a lot of the work it gets handed belongs
+  somewhere cheaper. Selling limited stock, holding a place, counting a pot: those are all one key.
+  Read [Reservations and totals](/docs/guides/reservations) first.
+
+  What sorts them is whether two keys really have to change together, and whether either change could
+  be undone afterwards. Trading a sword for a shield needs this. Selling a sword from a shop does not.
+</Callout>
+
 ## The id
 
 The id comes first and it's required. It has to be a stable name derived from the thing you're
@@ -146,6 +155,23 @@ considered dead, so another server will abort it on its behalf.
 While it's stuck, writes to that key answer [`Busy`](/docs/concepts/reasons), and `Edit` or `Reset`
 can answer `Unresolved` when the stuck leg would change the verdict. Neither means it failed. Both
 mean ask again in a moment.
+
+Ask again yourself. `Tx` does not retry a `Busy` internally, because a key under contention is the
+last place to send more traffic:
+
+```luau
+local Ok, Why
+for _ = 1, 6 do
+	Ok, Why = Store:Tx(`trade:{TradeId}`, Legs):Wait()
+	if Ok or Why ~= Ledger.Reason.Busy then
+		break
+	end
+	task.wait(0.2 + math.random() * 0.3)
+end
+```
+
+A key every player writes to is a throughput limit rather than a correctness one. See
+[One key at a time](/docs/limits#one-key-at-a-time).
 
 You can force a pass with `Ledger.Sweep()`.
 
