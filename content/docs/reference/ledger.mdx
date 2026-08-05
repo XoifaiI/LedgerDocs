@@ -112,10 +112,14 @@ Back to the real `DataStoreService`. Only affects stores built after the call.
 ## Ledger.UseClock
 
 ```luau
-Ledger.UseClock(Reads: (() -> number)?) -> ()
+Ledger.UseClock(Reads: (() -> number)?, Sleeps: ((Seconds: number) -> ())?) -> ()
 ```
 
 Swaps the function Ledger reads the time from. Pass `nil` to go back to `os.time`.
+
+`Sleeps` swaps the wait Ledger polls on, and defaults to `task.wait`. There is one poll, in
+[`Session:CommitOp`](/docs/reference/session), where a commit waits on a transaction another server
+parked on the key. Its deadline is read off your clock.
 
 ## Ledger.Sweep
 
