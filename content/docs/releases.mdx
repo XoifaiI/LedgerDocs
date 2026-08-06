@@ -5,6 +5,28 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.0.1
+
+```diff
+- Two senders using one transfer name, where one of the amounts was destroyed and both calls said true
+- Recovery settling a hold against a delivery that came from a different sender
+- Reset dropping units set aside for another key, so a grant could leave them on both
+- A commit refused by a newer write staying in the log and stopping that key compacting for good
+
+! A transfer name now means the sender as well as the amount and the receiver
+! Reset answers Busy while the key holds units set aside for another key
+! A compaction holds back a reserved op this build does not handle, the same as it does for yours
+```
+
+### Upgrading
+
+A transfer name belongs to one sender now. Two senders were never meant to share one, and doing it
+used to destroy an amount without saying so. It answers `Spent` instead.
+
+Handle `Busy` from `Reset` if you call it. A key holding units for another key refuses the reset the
+same way a key with a transaction parked on it already did. Hand the units over or release them
+first.
+
 ## 4.0.0
 
 ```diff
