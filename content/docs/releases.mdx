@@ -5,6 +5,30 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.0.2
+
+```diff
++ Folding a log is about a fifth faster, and every read folds one
++ A Future holds less than half the memory it used to
++ An Observer sends a value about three times faster
+
+- A transfer name used by two senders, where a record written before 4.0.1 could settle the wrong hold
+- Session:Apply answering Refused for an op that only holds once a parked transaction goes through
+
+! An Observer sends to its listeners in the order they subscribed
+```
+
+### Upgrading
+
+Drop it in. A delivery now says who sent it from the delivery itself rather than from its name, so a
+record written by an older build is read the same way as a new one.
+
+`Session:Apply` answers `Busy` or `Unresolved` in one more place. An op that the reducer turns away
+now, but would take once a parked transaction goes through, answers
+[`Unresolved`](/docs/concepts/reasons) instead of [`Refused`](/docs/concepts/reasons). `Store:Edit`
+already answered that way, so the two agree now. Ask again once the transaction settles rather than
+telling the player no.
+
 ## 4.0.1
 
 ```diff
