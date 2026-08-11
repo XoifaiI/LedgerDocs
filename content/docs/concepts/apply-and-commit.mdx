@@ -106,3 +106,28 @@ yourself, but it's there for the moment before you do something risky:
 ```luau
 Session:Flush():Wait()
 ```
+
+## Many ops, one request
+
+A flush writes the whole queue in one request. The number of ops does not change this. Use it when
+one action of a player must change more than one part of their data.
+
+| call | requests |
+| --- | --- |
+| `Session:Apply` | none |
+| `Session:Flush` | one, for the whole queue |
+| `Session:Commit` | one, or two when ops are already queued |
+| `Store:Edit` | one, and it takes one op |
+
+```luau
+Session:Apply("Coins", { Amount = 500 })
+Session:Apply("Sword")
+Session:Flush():Wait()
+```
+
+Two ops, and one request. Three `Commit` calls cost three requests. Each `Commit` is durable before
+it answers. A `Commit` also writes the queued ops first, if there are any.
+
+The ops go in together. Each op is still folded on its own. If the reducer refuses one op, the
+other ops stay applied. Write one op when a grant must be all or nothing. Let the reducer make each
+change for that one op. One op cannot apply in part.

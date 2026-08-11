@@ -228,6 +228,22 @@ fail. The store version reads the record and gives you a `Future<boolean?, Reaso
 It's asking about the name, not about this call, which is exactly why it's the right thing to check
 on a replay.
 
+<Callout type="warn">
+  A name lives on one key of one store. Ask `DidApply` on the store that the name was written to.
+
+  A handler can grant on a profile store and record the sale on a second store. It then needs one
+  name for each store. Check each name on its own store.
+
+  If you ask the profile store about a name on the record store, the answer is always `false`. The
+  write is refused because it is a replay. The check says that it never landed. The handler never
+  finishes, and the receipt comes back for ever.
+</Callout>
+
+`Session:DidApply` reads live state. Live state includes the ops that wait for the next save.
+`Apply` puts a name in that queue, so the answer is `true` before the op is written. On a receipt,
+grant with `Commit`. You can also `Apply` and then `Flush`. A granted answer then means a saved
+grant.
+
 ## How long a name is remembered
 
 Long enough that you don't have to think about it, and not so long that the set grows forever.

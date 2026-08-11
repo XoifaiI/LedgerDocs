@@ -68,6 +68,13 @@ Session:DidApply(Id: string) -> boolean
 Whether a [`Once`](/docs/concepts/once) name ever applied on this key. Reads live state, so it
 doesn't yield.
 
+<Callout type="warn">
+  Live state includes the ops that wait for the next save. `Apply` puts a name in that queue, so
+  `DidApply` gives `true` before the op is written. It tells you that the name applied. It does not
+  tell you that the name is saved. To be sure that it is saved, use `Commit`, or use `Apply` and
+  then `Flush`.
+</Callout>
+
 ## Writing
 
 ### Apply
