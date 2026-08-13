@@ -104,6 +104,10 @@ Return `nil` for anything you don't recognise. Ledger treats that as a refusal, 
 rolling deploy safe. An old server that's never heard of `NewFeatureOp` refuses it instead of
 guessing at it.
 
+That's a kind you don't know yet. A kind you've deleted is the other way round, because nothing is
+ever going to accept it, and refusing one of those stops the key compacting for good. See [changing
+the reducer](/docs/guides/migrations#changing-the-reducer).
+
 ## Check the fields
 
 Ops come from your own code, but they also come back out of a datastore that's been holding them for

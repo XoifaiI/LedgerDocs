@@ -1,6 +1,6 @@
 ---
 title: Migrations
-description: Changing the shape of your data while old servers are still running.
+description: Changing the shape of your data, and changing the reducer, while old servers are still running.
 ---
 
 A migration is a function that takes the old state and gives back the new one. You add them to the
@@ -74,15 +74,15 @@ Store:Reset(UserId):Wait()  --> false, "Behind"
 The version sits on the snapshot, so a key gets one the first time it compacts. Before that the
 record is only ops, and an older server reads it normally.
 
-A write from that older server answers differently:
+The floor doesn't wait for a compaction. Every write stamps it, so a key can start turning an old
+server away before it has ever compacted:
 
 ```luau
-Store:Edit(UserId, "Add", { Amount = 5 }):Wait()   --> false, "Unresolved"
+Store:Edit(UserId, "Add", { Amount = 5 }):Wait()   --> false, "Behind"
 ```
 
-The op reaches the log before anything folds it, so the write did happen. This server cannot read the
-record back to see what it folded to. `Unresolved` says that. A newer server folds the op, and the
-deploy clears it.
+The floor is checked first, inside the transform, so nothing reaches the log. The write doesn't
+half happen and there's nothing queued behind it. The deploy clears it.
 
 An older server can never compact one of these records, so it can never write a snapshot in the old
 shape.
@@ -119,3 +119,60 @@ version, so changing it changes what every existing record means.
 
 Version numbers only go up. A record written at a version newer than this server knows is either
 read through the compatible path or refused, never folded down.
+
+## Changing the reducer
+
+Ledger puts no version on the reducer. A migration changes the snapshot, not the ops. Each server
+folds a log with the reducer that it runs now, so a change to the reducer changes what the older ops
+do.
+
+Add a kind for a new rule. You can widen a kind to accept ops that it refused before. Do not narrow
+one, do not change what one does, and never use a name twice.
+
+A branch is not dead code. It builds part of the state of every record whose log still holds one of
+its ops. Keep it when the feature goes, and keep it correct through later migrations:
+
+```luau
+-- pets were taken out of the game. the ops are still in the logs, so the rule stays
+if Op.Kind == "BuyPet" then
+	if type(Op.Cost) ~= "number" or Op.Cost > State.Gold then
+		return nil
+	end
+
+	local Next = table.clone(State)
+	Next.Gold -= Op.Cost
+	Next.Pets = table.clone(State.Pets)
+	Next.Pets[Op.PetId] = true
+	return Next
+end
+```
+
+Delete it and the fold leaves out that gold and that pet, the key stops compacting with a warning
+naming the kind, and the log grows until writes answer [`Full`](/docs/concepts/reasons). Put the
+branch back and both return.
+
+Do not swap it for a branch that accepts the op and changes nothing. The state goes the same way,
+and this time the key compacts, so the snapshot keeps that result:
+
+```luau
+-- wrong. the fold drops what the op did, and a compaction writes that down for good
+if Op.Kind == "BuyPet" then
+	return table.clone(State)
+end
+```
+
+Only a loaded session compacts, and only when the log is long enough, so an offline key holds its
+ops until you deploy a build that folds them.
+
+A change to the reducer does not move the floor, because Ledger cannot see it. Two builds then fold
+one log by different rules during a deploy. Add a migration that gives back its state unchanged when
+the change is not safe for both:
+
+```luau
+Migrations = {
+	-- ...
+	function(State) return State end,  -- 3: SpendGold now checks a daily cap
+}
+```
+
+An old server then gets [`Behind`](/docs/concepts/reasons).
