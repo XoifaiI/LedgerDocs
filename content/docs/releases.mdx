@@ -5,6 +5,30 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.0.3
+
+```diff
++ Simulation V2
+
+- A transaction decided by a server still driving an earlier transaction of the same name
+- Release giving back units that Grant had already handed to another key, so they were on both
+
+! Release answers Held while a grant is handing those units over
+! Grant costs four requests, it used to be three
+```
+
+### Upgrading
+
+Handle `Held` from `Release`. A grant that has started moving the units answers it. They are not on
+the sender to give back, and they are not certainly delivered either, so only recovery can say which.
+Tell the player to wait rather than releasing again. Nothing is lost in the meantime.
+
+Finish the deploy before granting. A hand over writes a step older builds don't know, and an old
+build reading that key holds the step back rather than dropping it, the same way it already does for
+a reserved op it doesn't handle. That key stops compacting until every server is on 4.0.3. Worse, an
+old build still gives those units back on a `Release`, which is the bug above. Roll it out, then use
+`Grant`.
+
 ## 4.0.2
 
 ```diff

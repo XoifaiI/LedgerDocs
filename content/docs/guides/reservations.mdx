@@ -60,15 +60,20 @@ Shop:Reserve("sword", "Stock", 1, OrderId, { To = tostring(Player.UserId) }):Wai
 Shop:Grant("sword", OrderId):Wait()
 ```
 
-The units are added to the receiving key and the hold on the shop is settled, in that order. The
-receiving key remembers the name, so granting the same reservation twice adds nothing.
+The reservation is marked as being handed over, the units are added to the receiving key, and the
+hold on the shop is settled, in that order. The receiving key remembers the name, so granting the
+same reservation twice adds nothing.
 
-A server that dies between the two writes leaves the units on both keys. Recovery reads the receiver
-before it gives anything back, so a reservation already handed over is settled rather than returned.
-Nothing is created and nothing is lost.
+A server that dies part way through leaves the units on both keys. Recovery reads the receiver before
+it gives anything back, so a reservation already handed over is settled rather than returned. Nothing
+is created and nothing is lost.
 
-If the receiving key was erased, `Grant` answers [`Held`](/docs/concepts/reasons) and the units stay
-set aside until recovery gives them back.
+The mark is what stops anything else deciding in the meantime. `Release` answers
+[`Held`](/docs/concepts/reasons) once a grant has started, and the hold is not given back by the next
+`Reserve` either. Both would hand back units the receiver may already have.
+
+If the receiving key was erased, `Grant` answers `Held` and the units stay set aside until recovery
+gives them back.
 
 ## The buying sequence
 
@@ -156,8 +161,8 @@ Measured on the fake datastore, 100 limited stock purchases:
 | A transaction across buyer and shelf | 800 |
 | Reserve and confirm | 201 |
 
-`Reserve`, `Confirm` and `Release` cost one request each. `Grant` costs three, because it reads the
-key holding the units before writing to both.
+`Reserve`, `Confirm` and `Release` cost one request each. `Grant` costs four. It reads the key holding
+the units, marks the reservation as being handed over, writes to the receiver, and settles the hold.
 
 A reservation is also a plain append, so it never answers `Busy` the way a transaction on a contended
 key does.

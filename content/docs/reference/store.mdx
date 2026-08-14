@@ -190,6 +190,10 @@ Store:Release(Key: KeyLike, Id: string) -> Future<boolean, Reason?>
 
 Gives back what `Id` set aside. The field returns to where it was.
 
+Answers [`Held`](/docs/concepts/reasons) while a `Grant` is handing those units to another key. They
+are not here to give back, and the grant may already have delivered them. Recovery settles it either
+way, so leave it alone rather than calling again.
+
 ### Grant
 
 ```luau
@@ -209,8 +213,8 @@ until recovery gives them back.
 Safe to call again. The receiving key remembers the name, so a second `Grant` adds nothing and
 answers `false`.
 
-A server that dies between the two writes leaves the units on both keys. Recovery reads the receiver
-before it gives anything back, so a reservation already handed over is settled rather than returned.
+A server that dies part way through leaves the units on both keys. Recovery reads the receiver before
+it gives anything back, so a reservation already handed over is settled rather than returned.
 
 ### Bump
 
