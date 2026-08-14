@@ -19,9 +19,11 @@ can spend them, and the field already reads lower.
 local Shop = Ledger.New({
 	Name = "Shop",
 	Keys = "String",
-	Default = { Stock = 500 },
+	Default = { Stock = 0 },
 	Reducer = Reducer
 })
+
+Shop:Edit("sword", "Restock", { Amount = 500 }):Wait()
 
 local Ok = Shop:Reserve("sword", "Stock", 1, OrderId):Wait()
 if not Ok then
@@ -39,6 +41,32 @@ Shop:Release("sword", OrderId):Wait()   -- the unit goes back, stock returns to 
 
 Asking to reserve under a name that already holds something answers `true` and holds nothing extra,
 so a retry is safe.
+
+### One key is one item
+
+`"sword"` and `"shield"` are separate keys with separate records, so they hold separate stock.
+`Default` is not a template for an item. It is the starting state of a key nothing has written yet,
+and the stock of each item arrives as an op like anything else:
+
+```luau
+-- in your reducer
+if Op.Kind == "Restock" then
+	return { Stock = Op.Amount }
+end
+```
+
+```luau
+Shop:Edit("sword", "Restock", { Amount = 500 }):Wait()
+Shop:Edit("shield", "Restock", { Amount = 1000 }):Wait()
+```
+
+Start the default at zero. A key nobody has written still folds to it, so a default of 500 means a
+misspelled item id has 500 in stock and `Reserve` says yes to all of it. Give the restock a
+[`Once`](/docs/concepts/once) name if it should land one time however many servers run it.
+
+The second argument to `Reserve` is a field, so one key can hold several pools. Keep that for units
+that share a limit. One key is one write queue, and putting every item on one key makes every
+purchase wait behind every other.
 
 ### Nobody has to clean up
 
