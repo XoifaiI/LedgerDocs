@@ -5,6 +5,35 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.0.4
+
+```diff
+- A key that never compacts again, after a session wrote an op the record could not fold
+- Commit answering Refused for an op it had already written
+```
+
+### Upgrading
+
+Drop it in. Nothing about the stored record changed.
+
+A key that already carries one of these ops does not fix itself. Upgrading stops another one being
+written and leaves the one that is there, so that key keeps warning and its log keeps growing.
+Ledger names the key and the op kind in the warning, so you know which keys and which kind.
+
+To clear one, make your reducer take that kind instead of turning it away. Hand back a copy of the
+state and change nothing:
+
+```luau
+if Op.Kind == "OpenCase" and State.Inventory.Items[Op.CaseId] == nil then
+	return table.clone(State)
+end
+```
+
+Deploy that and the key compacts the next time it is written to. Put the guard back afterwards.
+
+`Reset` does not do it. It writes an op of its own behind the one that is stuck, so the key ends up
+one op longer than it started.
+
 ## 4.0.3
 
 ```diff
