@@ -96,9 +96,12 @@ A server that dies part way through leaves the units on both keys. Recovery read
 it gives anything back, so a reservation already handed over is settled rather than returned. Nothing
 is created and nothing is lost.
 
-The mark is what stops anything else deciding in the meantime. `Release` answers
+The mark is what stops anything else deciding in the meantime. `Release` and `Confirm` both answer
 [`Held`](/docs/concepts/reasons) once a grant has started, and the hold is not given back by the next
-`Reserve` either. Both would hand back units the receiver may already have.
+`Reserve` either. All three would act on units the receiver may already have.
+
+Once the grant is finished, `Confirm` answers `false`. The units went to the other key, so there is
+nothing here to spend.
 
 If the receiving key was erased, `Grant` answers `Held` and the units stay set aside until recovery
 gives them back.

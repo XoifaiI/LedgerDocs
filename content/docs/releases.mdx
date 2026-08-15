@@ -5,6 +5,38 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.0.5
+
+```diff
++ Optimized Measure by ~9x
++ Minor optimizations with lazy loading
+
+- Grant handing units over after something else had already taken the reservation, so they ended up on both keys
+- Confirm saying it had spent units that a grant had already moved to another key
+- Transfers left half finished when a player left while their data was still loading
+- An error in your reducer reaching Session:Apply instead of the op being refused
+- Session:Apply accepting state that could never be saved, so every save after it failed
+- Session:Apply throwing when a reducer returned State itself instead of a copy
+- A warning that your reducer is not deterministic, when the cause was another server compacting the key
+
+! Confirm answers Held while a grant is moving those units
+! Confirm answers Refused once a grant has moved them, it used to answer true
+```
+
+### Upgrading
+
+Drop it in. The rest of this only matters if you use `Grant`.
+
+Finish the deploy before you grant again, the same as 4.0.3. A grant writes one more step that older
+builds don't know. Until every server is on 4.0.5, a key you have granted from stops compacting, and
+an old server still reads that reservation as open, so a `Confirm` there can spend units the other key
+already has.
+
+`Confirm` now answers `false` if a grant already moved the units. It used to answer `true`, so if you
+read that as the units being yours to spend, you counted the same units twice. While a grant is still
+running, `Confirm` answers [`Held`](/docs/concepts/reasons), the same as `Release` does. Wait for the
+grant to finish rather than confirming again.
+
 ## 4.0.4
 
 ```diff

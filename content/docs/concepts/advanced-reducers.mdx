@@ -245,8 +245,7 @@ if type(Op.Amount) ~= "number" then
 end
 ```
 
-A reducer that throws is a bug. It is not a refusal, and where the error surfaces depends on which
-method you called. See [check the fields](/docs/concepts/reducer#check-the-fields).
+A reducer that throws is a bug. Ledger catches it, warns with what was raised, and answers `Refused`. See [check the fields](/docs/concepts/reducer#check-the-fields).
 
 ## A worked example
 

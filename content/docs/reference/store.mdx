@@ -180,7 +180,11 @@ Store:Confirm(Key: KeyLike, Id: string) -> Future<boolean, Reason?>
 Spends what `Id` set aside. The units are gone and the field stays where it is.
 
 Answers `false` if nothing is set aside under that name, so a confirm after a release cannot spend the
-same units twice.
+same units twice. A `Grant` that already moved the units answers `false` as well, because they were
+not spent here.
+
+Answers [`Held`](/docs/concepts/reasons) while a `Grant` is handing those units over. They are not on
+this key to spend, and only recovery can say where they ended up.
 
 ### Release
 
