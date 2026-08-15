@@ -176,7 +176,61 @@ Do it for every key the transaction touched that has a session on this server, t
 It costs one request each and only on a purchase.
 
 A player on another server can't be flushed from here. They pick the change up on their next read or
-their next write, so two minutes is the the best ledger can do without relying on MessagingService.
+their next write, so two minutes is as good as Ledger on its own can do.
+
+### Telling another server to refresh
+
+Ledger can't reach another server. Your game can, so send the buyer's id over `MessagingService` and
+let the server holding them do the flush.
+
+```luau
+local MessagingService = game:GetService("MessagingService")
+local Players = game:GetService("Players")
+
+local REFRESH = "LedgerRefresh"
+
+MessagingService:SubscribeAsync(REFRESH, function(Message)
+	local Person = Players:GetPlayerByUserId(Message.Data)
+	if Person == nil then
+		return
+	end
+
+	local Session = Profiles:Get(Person)
+	if Session then
+		Session:Flush():Wait()
+	end
+end)
+```
+
+Then call this instead of flushing directly, for each side of the trade:
+
+```luau
+local function Refresh(UserId: number)
+	local Person = Players:GetPlayerByUserId(UserId)
+	if Person ~= nil then
+		local Session = Profiles:Get(Person)
+		if Session then
+			Session:Flush():Wait()
+		end
+		return
+	end
+
+	pcall(function()
+		MessagingService:PublishAsync(REFRESH, UserId)
+	end)
+end
+```
+
+**Send the id and nothing else.** The other server re-reads the key itself, so the record stays the
+only thing either server believes. A message carrying the new inventory would be a second copy of the
+truth, and a dropped or repeated one would put the two servers out of step.
+
+**Treat it as a nudge, not a guarantee.** `MessagingService` is best effort and rate limited, and
+`PublishAsync` throws once you hit a limit, which is why the call above is wrapped. A message that
+never arrives costs that player the ordinary two minute read. Nothing is lost either way, so there is
+no need to confirm delivery or retry.
+
+Publishing only when the player isn't here keeps most purchases off the topic entirely.
 
 ### What throws and what answers
 
