@@ -146,6 +146,38 @@ is on the server running the transaction, and the seller may be on another one o
 Waiting does not fix it. An autosave writes what was queued when it ran, so the newest applies are
 still unwritten whenever the transaction lands.
 
+### A live session does not know a leg wrote to it
+
+The record carries the change the moment `Tx` answers `true`. A session already open on that key does
+not. It holds its own copy and only picks an outside write up when it folds the record again.
+
+A session with nothing queued and nothing parked reads every two minutes, so a player who just bought
+something waits that long to see it arrive. Nothing is wrong and nothing is at risk. They are reading
+a copy that has not caught up.
+
+Flush them once the transaction commits:
+
+```luau
+local Ok = Store:Tx(`buy:{ListingId}`, Legs):Wait()
+if not Ok then
+	return
+end
+
+local Session = Players:Get(Buyer)
+if Session then
+	Session:Flush():Wait()
+end
+```
+
+That re-reads the key, folds it again, and pushes anything the session still had queued. It also
+fires [`Observe`](/docs/reference/session), so a UI bound to the session updates on its own.
+
+Do it for every key the transaction touched that has a session on this server, the seller included.
+It costs one request each and only on a purchase.
+
+A player on another server can't be flushed from here. They pick the change up on their next read or
+their next write, so two minutes is the the best ledger can do without relying on MessagingService.
+
 ### What throws and what answers
 
 The shape of a leg is your code, so getting it wrong throws where you wrote it. A key the target
