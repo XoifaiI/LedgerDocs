@@ -16,7 +16,10 @@ local Service = Ledger.UseMock({ Players = 30 })
 Ledger.UseReal()
 ```
 
-Call it before you build any stores. A store built against the real datastore stays on it.
+Call it one time, and call it early. Every store reads the backend on every request, so a store you
+built before the call moves onto the mock as well, and a second call anywhere puts every store on a
+fresh empty one. Everything written up to that point stops reading back, and a key folds to your
+`Default` as though it had never been touched. Ledger warns if stores are live when it happens.
 
 `Players` is how many players to size the request budget for, since Roblox's budget formula is a
 base plus a per player allowance. Set it to what a real server of yours looks like.

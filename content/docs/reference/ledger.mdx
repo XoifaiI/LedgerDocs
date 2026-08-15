@@ -90,7 +90,11 @@ Ledger.Reason.Behind
 Ledger.UseMock(Options: { Players: number?, CCU: number?, Throttled: boolean? }?) -> Service
 ```
 
-Points every store built after this call at an in memory datastore.
+Points every store at an in memory datastore, including ones you built before the call.
+
+Call it one time. Each call hands back a fresh empty service, and every store moves onto it, so a
+second call anywhere in your game makes everything written up to that point unreadable. Ledger warns
+if it catches you doing it while stores are live.
 
 | Option | | |
 | --- | --- | --- |
