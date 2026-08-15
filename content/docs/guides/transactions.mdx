@@ -107,6 +107,45 @@ than something it tries to merge.
 Don't put `Once` on a leg. The transaction id already makes every leg land at most one time, and
 Ledger throws if it sees one.
 
+### A leg reads what is stored, not what a session is holding
+
+Every leg folds the record on the datastore. A live session that has taken ops through
+[`Apply`](/docs/concepts/apply-and-commit) has not written them yet, so a leg on that player's key
+does not see them.
+
+That bites hardest on a player who just joined. Grant them something with `Apply`, list it for sale a
+few seconds later, and the leg reads a key that has never been written, which folds to your `Default`.
+The reducer sees an empty inventory and a new player, refuses, and the whole transaction answers
+[`Refused`](/docs/concepts/reasons).
+
+```luau
+-- the session says the item is there, the stored record does not
+Session:Apply("GrantItem", { Item = ItemId })
+
+Store:Tx(`listing:{ListingId}`, {
+	{ Key = "market", Kind = "AddListing", Fields = { Item = ItemId } },
+	{ Store = Players, UserId = Seller, Kind = "ListItem", Fields = { Item = ItemId } },
+}):Wait()   --> false, Refused
+```
+
+Two ways round it. Flush first if the session is on this server:
+
+```luau
+Session:Flush():Wait()
+```
+
+Or write it durably in the first place, which is what `Commit` is for:
+
+```luau
+Session:Commit("GrantItem", { Item = ItemId }):Wait()
+```
+
+Prefer `Commit` for anything a transaction will later depend on. A flush only works while the session
+is on the server running the transaction, and the seller may be on another one or offline.
+
+Waiting does not fix it. An autosave writes what was queued when it ran, so the newest applies are
+still unwritten whenever the transaction lands.
+
 ### What throws and what answers
 
 The shape of a leg is your code, so getting it wrong throws where you wrote it. A key the target
