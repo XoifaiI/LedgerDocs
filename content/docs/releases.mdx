@@ -5,6 +5,20 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.0.6
+
+```diff
+- A transaction that left a leg parked not putting that key on the recovery sweep, so it waited for a read
+```
+
+### Upgrading
+
+Drop it in. Nothing about the stored record changed.
+
+A key that is already carrying a leg from before the upgrade does not fix itself. The sweep is told
+about a key when the transaction ends, so one that ended before you upgraded was never handed over.
+Any read or write to that key picks it up, and `Resettle` does it on demand.
+
 ## 4.0.5
 
 ```diff
