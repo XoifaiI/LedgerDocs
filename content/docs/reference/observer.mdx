@@ -12,6 +12,9 @@ end)
 An observer is a stream of values you can subscribe to. Ledger pushes the new state onto one every
 time a change goes through, and it hands you that same stream from `Session:Observe()`.
 
+`Store:Stale()` is the other stream Ledger gives you. It carries the keys this server has changed
+rather than a state table. Everything on this page works on both.
+
 ## Subscribe
 
 ```luau
@@ -46,6 +49,14 @@ update won't stop the others.
 
 Listeners are called over a snapshot of the list, so subscribing or disconnecting from inside a
 listener is safe and takes effect on the next push rather than partway through this one.
+
+### Listeners that may yield
+
+`Store:Stale()` is the one stream that does not work this way. Ledger calls each of its listeners on
+a fresh thread, so they can yield. A `Flush` or a `PublishAsync` inside one is fine.
+
+Ledger warns when a listener runs for 10 seconds without returning. Every pushed key holds a thread
+until its listener returns, so one that never returns costs a thread per write.
 
 ## Map
 

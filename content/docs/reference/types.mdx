@@ -143,8 +143,8 @@ See [Future](/docs/reference/future) for timeouts, error handling, and why a fai
 
 ## Observer
 
-What `Session:Observe()` hands back. Subscribe for every change that goes through, and chain with
-`Map`, `Filter` and `Changed`.
+What `Session:Observe()` and `Store:Stale()` hand back. Subscribe for every change that goes
+through, and chain with `Map`, `Filter` and `Changed`.
 
 ```luau
 Session:Observe():Subscribe(function(State)

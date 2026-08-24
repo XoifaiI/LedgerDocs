@@ -155,42 +155,12 @@ A session with nothing queued and nothing parked reads every two minutes, so a p
 something waits that long to see it arrive. Nothing is wrong and nothing is at risk. They are reading
 a copy that has not caught up.
 
-Flush them once the transaction commits:
+[`Store:Stale()`](/docs/reference/store#stale) carries the keys this server has changed. Subscribe
+once, and flush the session on every key it names:
 
 ```luau
-local Ok = Store:Tx(`buy:{ListingId}`, Legs):Wait()
-if not Ok then
-	return
-end
-
-local Session = Players:Get(Buyer)
-if Session then
-	Session:Flush():Wait()
-end
-```
-
-That re-reads the key, folds it again, and pushes anything the session still had queued. It also
-fires [`Observe`](/docs/reference/session), so a UI bound to the session updates on its own.
-
-Do it for every key the transaction touched that has a session on this server, the seller included.
-It costs one request each and only on a purchase.
-
-A player on another server can't be flushed from here. They pick the change up on their next read or
-their next write, so two minutes is as good as Ledger on its own can do.
-
-### Telling another server to refresh
-
-Ledger can't reach another server. Your game can, so send the buyer's id over `MessagingService` and
-let the server holding them do the flush.
-
-```luau
-local MessagingService = game:GetService("MessagingService")
-local Players = game:GetService("Players")
-
-local REFRESH = "LedgerRefresh"
-
-MessagingService:SubscribeAsync(REFRESH, function(Message)
-	local Person = Players:GetPlayerByUserId(Message.Data)
+Profiles:Stale():Subscribe(function(Key)
+	local Person = Players:GetPlayerByUserId(tonumber(Key) or 0)
 	if Person == nil then
 		return
 	end
@@ -202,26 +172,65 @@ MessagingService:SubscribeAsync(REFRESH, function(Message)
 end)
 ```
 
-Then call this instead of flushing directly, for each side of the trade:
+That re-reads the key, folds it again, and pushes anything the session still had queued. It also
+fires [`Observe`](/docs/reference/session), so a UI bound to the session updates on its own.
+
+The stream names every key the transaction touched, so the buyer and the seller both refresh. It
+costs one request per key with a session here, and only on a purchase.
+
+A cross store transaction pushes each leg onto its own store's stream, so subscribe on both stores.
+
+This listener yields, which the stale stream allows. The ones on `Session:Observe()` may not. See
+[Observer](/docs/reference/observer#listeners-that-may-yield).
+
+A player on another server is not on this stream. Their server holds them, so their server does the
+flush, and the next section is how you ask it to.
+
+### Telling another server to refresh
+
+Ledger can't reach another server. Your game can, so send the key over `MessagingService` and let the
+server holding that player do the flush.
+
+Drive it from the same stream. Flush a key with a session here, and publish one without:
 
 ```luau
-local function Refresh(UserId: number)
-	local Person = Players:GetPlayerByUserId(UserId)
-	if Person ~= nil then
-		local Session = Profiles:Get(Person)
-		if Session then
-			Session:Flush():Wait()
-		end
+local MessagingService = game:GetService("MessagingService")
+local Players = game:GetService("Players")
+
+local REFRESH = "LedgerRefresh"
+
+local function Refresh(Key: string): boolean
+	local Person = Players:GetPlayerByUserId(tonumber(Key) or 0)
+	if Person == nil then
+		return false
+	end
+
+	local Session = Profiles:Get(Person)
+	if Session then
+		Session:Flush():Wait()
+	end
+	return true
+end
+
+MessagingService:SubscribeAsync(REFRESH, function(Message)
+	Refresh(Message.Data)
+end)
+
+Profiles:Stale():Subscribe(function(Key)
+	if Refresh(Key) then
 		return
 	end
 
 	pcall(function()
-		MessagingService:PublishAsync(REFRESH, UserId)
+		MessagingService:PublishAsync(REFRESH, Key)
 	end)
-end
+end)
 ```
 
-**Send the id and nothing else.** The other server re-reads the key itself, so the record stays the
+The buyer sees the purchase in a moment either way. Without this they wait for the ordinary two
+minute read.
+
+**Send the key and nothing else.** The other server re-reads the key itself, so the record stays the
 only thing either server believes. A message carrying the new inventory would be a second copy of the
 truth, and a dropped or repeated one would put the two servers out of step.
 

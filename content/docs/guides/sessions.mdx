@@ -86,6 +86,14 @@ If the server is out of datastore budget, the autosave is skipped and Ledger war
 where ops start piling up, and if it keeps going you'll start seeing
 [`Backlog`](/docs/concepts/reasons) on writes.
 
+A session with nothing queued and no transaction parked on its key reads every two minutes instead.
+It has nothing to write, so it only checks what other servers wrote. That read is how a player who
+was sent gold or traded with finds out.
+
+[`Store:Stale()`](/docs/reference/store#stale) names each key this server changes, so you can flush
+that session at once rather than wait for the read. See
+[Transactions](/docs/guides/transactions#a-live-session-does-not-know-a-leg-wrote-to-it).
+
 ## Log size
 
 `Session.LogSize` is how many ops are in the stored log, and `Session.LogBytes` is roughly how many
@@ -124,6 +132,9 @@ end)
 It fires on every change that goes through, which includes ones that came from another server and
 turned up when a transfer or transaction settled. It does not fire for a refused op, because nothing
 changed.
+
+A listener here runs on the thread doing the write and must not yield. `Store:Stale()` is the one
+stream that lets a listener yield.
 
 Nothing disconnects your listeners for you. A released session stops pushing, so they never fire
 again, and if you didn't store the connection anywhere it gets collected with the session. If you

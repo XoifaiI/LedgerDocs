@@ -5,6 +5,25 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.1.0
+
+```diff
++ Store:Stale, a stream of the keys this server changed
+```
+
+### Upgrading
+
+Drop it in. Nothing about the stored record changed, and nothing you have written needs an edit.
+
+Ledger pushes a key onto the stream once a write has gone through. `Edit`, `Reserve`, `Confirm`,
+`Release`, `Bump` and `Reset` push the key they wrote. `Transfer` and `Grant` push both keys. `Tx`
+pushes every leg key onto that leg's own store. A write the reducer refuses pushes nothing.
+
+Listeners on this stream run on their own thread and may yield. Every other stream in Ledger calls
+its listeners inline.
+
+See [Stale](/docs/reference/store#stale).
+
 ## 4.0.6
 
 ```diff

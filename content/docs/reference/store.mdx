@@ -313,6 +313,47 @@ A key with a transaction parked on it answers [`Busy`](/docs/concepts/reasons), 
 
 `false` means the record is still there. Check it before you tell anyone their data is gone.
 
+## Watching writes
+
+### Stale
+
+```luau
+Store:Stale() -> Observer<string>
+```
+
+A stream of the keys this server has changed. Ledger pushes a key onto it once the write has gone
+through, so you can refresh a session on that key at once.
+
+```luau
+Store:Stale():Subscribe(function(Key)
+	print(`{Key} changed`)
+end)
+```
+
+These writes push a key:
+
+| method | what it pushes |
+| --- | --- |
+| `Edit`, `Reserve`, `Confirm`, `Release`, `Bump`, `Reset` | the key it wrote |
+| `Transfer` | both keys |
+| `Grant` | both keys |
+| `Tx` | every leg key, onto that leg's own store |
+
+Nothing else pushes. A write the reducer refuses pushes nothing, and so does a read, an `Erase` and
+every maintenance method.
+
+`Session:Apply` and `Session:Commit` push nothing either. That session already holds the change, so
+it has nothing to catch up on.
+
+The key is a string. A player store keys on the `UserId`, so call `tonumber` on it before you look
+the player up.
+
+Listeners on this stream run on their own thread and may yield, which the ones on
+`Session:Observe()` may not. See [Observer](/docs/reference/observer#listeners-that-may-yield).
+
+Use it to flush a session the moment another part of your game writes to its key. See
+[Transactions](/docs/guides/transactions#a-live-session-does-not-know-a-leg-wrote-to-it).
+
 ## Maintenance
 
 ### Resettle
