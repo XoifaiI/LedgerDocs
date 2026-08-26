@@ -5,6 +5,40 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.1.1
+
+```diff
++ Ledger.UseAsync, to replace the defer, the delay and the cancel that Ledger gives to the engine
++ Faster encoding of the marks that name the keys of a transaction
+
++ Better transaction mark clean up
+
+! Ledger writes each warning one time for each place in Ledger that sends it
+```
+
+### Upgrading
+
+Install the new version. The stored record does not change. Your code does not change.
+
+If you use the same transaction name again after an attempt that did not commit.
+Ledger now marks a completed marker as dead. Ledger does not remove it. 
+The recovery sweep removes the dead marker after one hour.
+
+You do not have to do anything. A key that holds a leg from before the upgrade settles at the next
+read of that key, or at the next write to it.
+
+**The warnings.** Ledger now writes each warning one time. Two identical failures at the same place
+in Ledger give one message. The output stays short when many keys have the same problem.
+
+**`UseAsync`.** `Ledger.UseAsync(Defer, Delay, Cancel)` replaces the three task functions that
+Ledger gives to the engine. It is for a test that has its own scheduler. Give it nothing to put
+the engine functions back.
+
+Ledger uses `Defer` for the queue on one key, and `Delay` for the timeout of a
+[`Future`](/docs/reference/future) and for the watch on a slow
+[`Observer`](/docs/reference/observer) listener. `Cancel` stops a delay. A game does not have to
+call this.
+
 ## 4.1.0
 
 ```diff
