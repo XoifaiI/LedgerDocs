@@ -86,6 +86,18 @@ Ledger can't raise it.
 Pick keys that come from something stable. A clan id, a listing id, a slug. Don't build them out of
 anything that might change, because there's no rename.
 
+## How much one key holds
+
+A clan or a listing takes writes from every player at once. Ledger writes down the name of every
+`Tx` leg, `Transfer` and `Grant` that goes through. It keeps each name for 30 days. That is about
+1,700 a day on one key before those names fill the state cap.
+
+`Edit` writes no name. A clan that only takes `Edit` has nothing to plan around. `Reserve` and
+`Confirm` write none either.
+
+Above that rate, give the entity more than one key. One key per guild rather than one for all of
+them. See [Limits](/docs/limits#applied-names).
+
 ## Caching
 
 `Peek` reads the record every time you call it. There's no cache, because with twenty servers

@@ -164,7 +164,8 @@ Asking for more than the field holds answers `Refused`.
 itself, so two reservations on one key can be held for different lengths.
 
 `To` names the key the units are going to, which is what `Grant` needs. Leave it out for a reservation
-you will `Confirm` on the same key.
+you will `Confirm` on the same key. With a `To`, `Hold` has to be just under 30 days or less, because a
+reservation held past the window Ledger keeps a delivery for is written off rather than given back.
 
 A reservation nobody takes is given back once its hold runs out, either by the next `Reserve` on that
 key or by the recovery sweep.

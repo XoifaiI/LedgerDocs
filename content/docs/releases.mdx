@@ -5,6 +5,74 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.2.0
+
+```diff
++ A tally keeps its total in a field of Ledger's own, so the number stops moving when your Default does
++ Marker clean up starts where the last pass stopped, so every shard gets its turn
++ A clean up pass asks both stores whether it can afford to run before each shard
+
+- A key that stopped compacting, and later stopped taking writes, after it held an op for a transaction that then aborted
+- Store:Total reading a different number on a server whose Default had changed
+- A marker left behind for good when a transaction took longer than five minutes to open one
+- Clean up spending more of the request budget than it had checked for
+- The near cap warning telling you to take out your own data when the field filling the key is Ledger's own
+
+! An Op field reads as unknown in strict Luau, so a reducer checks the type before it uses one
+! Reserve refuses a Hold longer than just under 30 days when you give it a To
+! Store:Total says so while a shard still keeps its total the old way
+```
+
+### Upgrading
+
+**Your reducer.** An `Op` field is `unknown` now instead of `any`. In `--!strict` that means you
+check the type before you use the value:
+
+```luau
+if Op.Kind == "Add" and type(Op.Amount) == "number" then
+	return { Gold = State.Gold + Op.Amount }
+end
+```
+
+Nothing about how an op behaves changed. The checker asks for the check that a careful reducer
+already made. A file that is not strict reads the same as before.
+
+**Tallies.** A tally used to keep its total in the field you named. A fold puts your `Default` under
+every key it reads, so once a shard compacted, that `Default` was part of the total, and a build
+that changed it read the tally differently. The total now lives beside your field instead.
+
+A shard written before the upgrade moves across on its next `Bump`. Until then Ledger says so, and
+names the tally, so you know which ones are waiting. A `Total` that was already off stays off by the
+same amount, because the old shape gives no way to tell your `Default` apart from what was counted.
+Bump each tally once and the number stops drifting from there.
+
+Finish the deploy before you read a total. A server still on 4.1 reads a shard that has moved across
+as empty, so its `Total` comes back short while the deploy runs. Nothing is lost, and the number is
+right again once every server is on 4.2.
+
+**Reservations.** A `Hold` longer than just under 30 days is refused when you give a `To`. A hold
+that outlives the window Ledger keeps a delivery for cannot be given back safely, so it is written
+off instead. Leave `To` out and a long hold is fine.
+
+**A key that already stopped compacting.** This one does not fix itself, the same as 4.0.4. Ledger
+keeps an op it accepted only because a transaction was parked, and drops it once that transaction
+has been decided. It can only do that for an op written by 4.2, because that is when the op is
+marked. A key that was already stuck stays stuck, and Ledger names it in the warning.
+
+To clear one, take the op that is stuck instead of turning it away. Hand back a copy of the state
+and change nothing:
+
+```luau
+if Op.Kind == "Spend" and State.Gold < Op.Amount then
+	return table.clone(State)
+end
+```
+
+Deploy that, let the key compact, then put the guard back.
+
+**Everything else.** Drop it in. The stored record grew two fields that older builds ignore, and no
+key needs a hand.
+
 ## 4.1.1
 
 ```diff
@@ -12,6 +80,7 @@ description: What changed, and what you have to change with it.
 + Faster encoding of the marks that name the keys of a transaction
 
 + Better transaction mark clean up
++ A clean up pass no longer steps over a page of marks that it did not read
 
 ! Ledger writes each warning one time for each place in Ledger that sends it
 ```
