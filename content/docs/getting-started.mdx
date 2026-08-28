@@ -8,19 +8,21 @@ description: Install Ledger, build a store, load a player.
 <Tabs items={['Wally', 'Rojo', 'Model file']}>
   <Tab value="Wally">
 ```toml
-[server-dependencies]
-Ledger = "xoifaii/ledger@4.3.0"
+[dependencies]
+Ledger = "xoifaii/ledger@4.3.1"
 ```
   </Tab>
   <Tab value="Rojo">
-Clone the repo and add `src` to your project as `ServerStorage/Ledger`.
+Clone the repo and add `src` to your project, as `ServerStorage/Ledger` or anywhere else the server can reach.
   </Tab>
   <Tab value="Model file">
-Drop the `Ledger` model anywhere server side. It's one module and it has no dependencies.
+Drop the `Ledger` model anywhere the server can reach. It's one module and it has no dependencies.
   </Tab>
 </Tabs>
 
-It's a server package. Requiring it from a LocalScript won't work, and isn't meant to.
+Ledger installs where both sides can see it, so you can keep it next to shared type definitions. It
+still only runs on the server, because only the server can reach a datastore, and requiring it from a
+client says so and stops there.
 
 ## Build a store
 

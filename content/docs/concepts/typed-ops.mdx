@@ -95,6 +95,16 @@ if Op.Kind == "Buy" then
 end
 ```
 
+An op is there to be read, so its fields are read only and writing one stops the build:
+
+```luau
+Op.Item = "Shield" -- Property Item of table '{ read Id: string, read Item: string, read Kind: "Buy" }' is read-only
+```
+
+Nothing reads an op after your reducer has it, so a write was only ever going to be lost. The state
+you are handed is frozen for the same reason, except that one shows up while you play, as a
+[`Refused`](/docs/concepts/reasons) op rather than an error where you wrote it.
+
 ## An op with no fields
 
 A kind takes its fields whether or not it has any:

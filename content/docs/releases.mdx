@@ -5,6 +5,27 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.3.1
+
+```diff
++ Runcontext check for client using Ledger
+
+! Ledger installs to the shared realm now, so a Wally dependency moves out of server-dependencies
+! Ledger.Op<Ops> and Ledger.OpOf are read only, so a reducer that writes to its op stops the build
+```
+
+### Upgrading
+
+**Wally.** Ledger is a shared package now, so move it across:
+
+```diff
+- [server-dependencies]
++ [dependencies]
+  Ledger = "xoifaii/ledger@4.3.1"
+```
+
+**Ops are read only.** On a typed store the op your reducer is handed no longer takes a write:
+
 ## 4.3.0
 
 ```diff
