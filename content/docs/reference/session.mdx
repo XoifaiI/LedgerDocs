@@ -88,6 +88,9 @@ Never touches the datastore.
 
 Use it for gameplay. See [Apply and Commit](/docs/concepts/apply-and-commit).
 
+On a session from a [typed store](/docs/concepts/typed-ops) the `Kind` and the `Fields` are checked
+against the ops you named. `Commit` and `CommitOp` take the same check.
+
 ### Commit
 
 ```luau

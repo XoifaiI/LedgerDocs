@@ -4,6 +4,7 @@
     "the-fold",
     "reducer",
     "advanced-reducers",
+    "typed-ops",
     "apply-and-commit",
     "reasons",
     "handling-failure",

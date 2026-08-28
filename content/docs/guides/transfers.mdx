@@ -121,11 +121,15 @@ dropped after 30 days, which is well past the point any retry could still turn u
 `Store:RecoverTransfers(Key)` forces a recovery on one key. The sweeper already does this, so it's
 here for a support tool, or for a live incident where you want one key dealt with right now.
 
+Both are about money moving between keys, so both want a store that names a `Balance` field. On a
+store without one they throw where you called them.
+
 <Callout type="warn">
-  `Store:Erase(Key)` hands over any money the key was sending out. After that it turns away anything
-  sent to the key and answers [`Held`](/docs/concepts/reasons), so the sender gets it back instead of
-  losing it. That lasts a full 8 days, and a write to the key does not cut it short. If the handover
-  itself fails, it warns with how much was lost and you'll have to pay the receivers back yourself. See
+  `Store:Erase(Key)` passes on any money the key was sending out, including money recovery had
+  stopped retrying because the key could still have been given it back. After that it turns away
+  anything sent to the key and answers [`Held`](/docs/concepts/reasons), so the sender gets it back
+  instead of losing it. That lasts a full 8 days, and a write to the key does not cut it short. If a
+  receiver won't take one, it names what was left and you settle that one yourself. See
   [Erase](/docs/guides/recovery#erase).
 </Callout>
 

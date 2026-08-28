@@ -5,6 +5,71 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.3.0
+
+```diff
++ Ledger.NewTyped, which takes a map of the op kinds your store writes and what each one carries
++ Apply, Commit and Edit on a typed store checked against that map, kind and fields together
++ Ledger.Op<Ops>, the op as one of your kinds, so a reducer narrows on Op.Kind and reads fields with no cast
++ The Field argument to Reserve, Bump and Total held against your state's number fields on a typed store
++ A typed reducer held to giving back your state or nil
++ Ledger.Record, Ledger.Future and Ledger.Observer exported
++ Erase passes on money the key was still sending, and units a Reserve set aside for another key, before the key goes
++ Marker clean up starts on every server, not only one that has already had a write to retry
+
+- A reservation kept rather than given back, after sitting 30 days without a Grant having started on it
+- A delivery landing after the window it can still be given back in
+- A reducer that copies the whole state being told it had written Ledger's own bookkeeping
+- A reducer being able to put applied names on a key that had none
+
+! Reserve answers Refused once a key holds 256 reservations at once
+! ClearDelivered throws on a store that names no Balance field, the way RecoverTransfers already did
+! Nothing else changes unless you ask for it. A store built with Ledger.New behaves as it did
+```
+
+### Upgrading
+
+There's nothing to do. `Ledger.New` takes the same options, hands back the same store, and every call
+site on it reads the same. Naming your ops is something you do when you want it.
+
+To opt one store in, write what each kind carries and build it with `NewTyped`:
+
+```luau
+export type Ops = {
+	Buy: { Item: string },
+	AddGold: { Amount: number },
+}
+
+local Store = Ledger.NewTyped<<Profile, Ops>>({
+	Name = "PlayerData",
+	Default = { Gold = 100, Items = {} },
+	Reducer = Reducer,
+})
+```
+
+The call shape doesn't change, so the calls you already have keep working:
+
+```luau
+Session:Apply("Buy", { Item = "Sword" })
+```
+
+Both kinds of store can live in one game. See [Typed ops](/docs/concepts/typed-ops).
+
+**Two answers you may not have seen before.** `Reserve` now answers `Refused` on a key already
+holding 256 reservations at once. A shop key sits at a handful, so reaching this means they are being
+made faster than they are being confirmed or released. Handle it the same way you already handle
+`Refused` from asking for more than the field holds.
+
+`ClearDelivered` is about money moving between keys, so it now throws on a store that names no
+`Balance` field, where before it wrote something the key could not read back. `RecoverTransfers`
+already asked for one. If `ClearDelivered` is in your support tooling, point it at the store that
+names the balance.
+
+**Erase.** It already passed on money the key was still sending. It now also passes on money that had
+been waiting too long to be retried, and units a `Reserve` set aside with a `To`. Nothing to change:
+an erase that used to warn about what went with the key now has less to warn about. See
+[Erase](/docs/guides/recovery#erase).
+
 ## 4.2.0
 
 ```diff

@@ -67,6 +67,34 @@ no data, Ledger warns about that too.
 
 Only for `Keys = "Player"` stores. Passing it on a `Keys = "String"` store throws at build time.
 
+## Ledger.NewTyped
+
+```luau
+Ledger.NewTyped<D, O>(Options: TypedConfig<D, O>) -> TypedStore<D, O>
+```
+
+Builds a store that knows what its ops carry. `D` is your state and `O` is a map of the kind to the
+fields that kind carries. Give it both:
+
+```luau
+export type Ops = {
+	Buy: { Item: string },
+	AddGold: { Amount: number },
+}
+
+local Store = Ledger.NewTyped<<Profile, Ops>>({
+	Name = "PlayerData",
+	Default = { Gold = 100, Items = {} },
+	Reducer = Reducer,
+})
+```
+
+`Apply`, `Commit` and `Edit` then check the kind against the ones you named and the fields against
+what that kind carries. Your reducer gets `Ledger.Op<Ops>`, which narrows on `Op.Kind`.
+
+It takes every option `Ledger.New` takes and validates them the same way. The store it builds is the
+same object and behaves identically at runtime. See [Typed ops](/docs/concepts/typed-ops).
+
 ## Ledger.Reason
 
 The ten reasons, as constants. See [Reasons](/docs/concepts/reasons).
@@ -155,9 +183,14 @@ end)
 
 ```luau
 Ledger.Store<D>
+Ledger.TypedStore<D, O>
 Ledger.Session<S>
+Ledger.TypedSession<S, O>
 Ledger.Op
-Ledger.Reducer<S>
+Ledger.Op<O>
+Ledger.OpOf<O, K>
+Ledger.OpMap
+Ledger.Reducer<S, O>
 Ledger.Reason
 Ledger.KeyLike
 Ledger.KeysMode
@@ -165,7 +198,11 @@ Ledger.TxLeg
 Ledger.HoldOptions
 Ledger.Migration
 Ledger.Config<D>
+Ledger.TypedConfig<D, O>
+Ledger.Record<D>
 Ledger.HistoryEntry
+Ledger.Future<T...>
+Ledger.Observer<T>
 ```
 
 See [Types](/docs/reference/types).

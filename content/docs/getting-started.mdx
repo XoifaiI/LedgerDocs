@@ -9,7 +9,7 @@ description: Install Ledger, build a store, load a player.
   <Tab value="Wally">
 ```toml
 [server-dependencies]
-Ledger = "xoifaii/ledger@4.2.0"
+Ledger = "xoifaii/ledger@4.3.0"
 ```
   </Tab>
   <Tab value="Rojo">
@@ -181,3 +181,20 @@ Ledger.UseReal()                  -- back to the real datastore
 
 The mock is stricter than Studio on purpose, because Studio hands you request budgets a live server
 never gets. See [Testing](/docs/guides/testing).
+
+## Naming your ops
+
+Everything above takes any kind with any fields. Once the kinds settle down, write down what each one
+carries. The checker then holds every write against it, and the reducer reads its fields without a
+cast:
+
+```luau
+export type Ops = {
+	SpendGold: { Amount: number },
+	AddItem: { Item: string },
+}
+
+local Store = Ledger.NewTyped<<Profile, Ops>>(Options)
+```
+
+See [Typed ops](/docs/concepts/typed-ops).

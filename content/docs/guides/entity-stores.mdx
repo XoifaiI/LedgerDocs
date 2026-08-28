@@ -106,6 +106,35 @@ call it in a loop or per frame.
 
 Read it once, hold onto it, and read again after you write.
 
+## Naming their ops
+
+An entity store takes [`NewTyped`](/docs/concepts/typed-ops) the same way a player store does, and
+its keys stay strings:
+
+```luau
+export type Ops = {
+	Join: { UserId: string },
+	Donate: { Amount: number },
+}
+
+local Clans = Ledger.NewTyped<<Clan, Ops>>({
+	Name = "Clans",
+	Keys = "String",
+	Balance = "Treasury",
+	Default = { Members = {}, Count = 0, Treasury = 0, Level = 1 },
+	Reducer = Reducer,
+})
+
+Clans:Edit("cool-guys", "Join", { UserId = tostring(Player.UserId) })
+```
+
+Writing `UserId: string` in the map turns the rule at the top of this page into one the checker
+holds. Passing `Player.UserId` straight in stops the build, instead of storing a number key that
+only goes wrong when the key first tries to compact.
+
+`Tx` is unchanged either way. Its legs take any kind on any store, which is what the next section
+needs.
+
 ## Mixing them
 
 A transaction can touch a player store and an entity store in the same commit, which is the usual

@@ -128,6 +128,9 @@ it up on its next fold.
 Can answer `Unresolved` when a stuck transaction leg would change the verdict. An edit that leg can't
 affect answers straight away.
 
+On a store built with [`NewTyped`](/docs/concepts/typed-ops) the `Kind` is held against the kinds you
+named and the `Fields` against what that kind carries.
+
 ### Transfer
 
 ```luau
@@ -157,15 +160,25 @@ Sets `Amount` of a numeric field aside on one key, under the name `Id`. The fiel
 straight away, so nothing else can spend it. `Field` has to name a number field your `Default`
 declares. `Id` is 1 to 64 characters.
 
+On a [typed store](/docs/concepts/typed-ops) that rule is checked, so a `Field` that isn't a number
+field of your state stops the build rather than throwing at the call. `Bump` and `Total` take the
+same check.
+
 Asking again under a name already set aside answers `true` and sets nothing aside a second time.
-Asking for more than the field holds answers `Refused`.
+Asking for more than the field holds answers `Refused`, and so does asking while a key already holds
+256 reservations at once. That is far more than a key is meant to carry, so reaching it means they
+are being made faster than they are being confirmed or released.
 
 `Hold` is how long to keep it, in seconds, and defaults to 15 minutes. It lives on the reservation
 itself, so two reservations on one key can be held for different lengths.
 
 `To` names the key the units are going to, which is what `Grant` needs. Leave it out for a reservation
-you will `Confirm` on the same key. With a `To`, `Hold` has to be just under 30 days or less, because a
-reservation held past the window Ledger keeps a delivery for is written off rather than given back.
+you will `Confirm` on the same key. With a `To`, `Hold` has to be just under 30 days or less, so that
+a reservation still runs out inside the window Ledger can settle it in.
+
+A reservation only keeps its units past 30 days if a `Grant` started handing it over and never
+answered. Ledger cannot tell whether those units arrived, so it says so and leaves them for you to
+sort out. One that was never handed over gets its units back however long it has been sitting.
 
 A reservation nobody takes is given back once its hold runs out, either by the next `Reserve` on that
 key or by the recovery sweep.
@@ -301,8 +314,10 @@ What it hands back is frozen, like everything else Ledger gives you. To change a
 Store:Erase(Key: KeyLike) -> Future<boolean, Reason?>
 ```
 
-Throws the record away and leaves a tombstone. Hands over money this key was sending out first. For
-8 days the tombstone refuses anything sent to the key, so money still being sent returns to whoever sent it.
+Throws the record away and leaves a tombstone. Anything the key still owes someone else goes first:
+money it was part way through sending, and units a `Reserve` set aside with a `To`. Ledger names
+whatever it could not pass on before the key went. For 8 days the tombstone refuses anything sent to
+the key, so money still being sent returns to whoever sent it.
 See [Erase](/docs/guides/recovery#erase).
 
 The tombstone holds for the full 8 days even if the key is written to again. A session on another
@@ -385,6 +400,9 @@ Store:ClearDelivered(Key: KeyLike) -> Future<boolean, Reason?>
 ```
 
 Drops delivered transfer ids older than 30 days from the key. Happens on its own.
+
+Both this and `RecoverTransfers` are about money moving between keys, so the store has to name a
+`Balance` field. Calling either on a store without one throws where you called it.
 
 ### Destroy
 

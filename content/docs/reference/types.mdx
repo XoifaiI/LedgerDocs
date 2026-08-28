@@ -11,11 +11,15 @@ Everything here is exported off the top level module, so `Ledger.Op`, `Ledger.St
 type Op = {
 	Id: string,
 	Kind: string,
-	[any]: any,
+	[any]: unknown,
 }
 ```
 
 One change. `Id` and `Kind` are Ledger's, everything else is yours.
+
+`Ledger.Op` is the open op above and every field on it reads as `unknown`. `Ledger.Op<Ops>` is the op
+as one of the kinds you named, so testing `Op.Kind` narrows to that kind and its fields come out
+typed. See [Typed ops](/docs/concepts/typed-ops).
 
 `Id`, `Kind` and `OnceAt` are reserved. Passing any of them in `Fields` warns and gets overwritten.
 
@@ -26,10 +30,25 @@ Every method that can fail answers `(value?, Reason?)` or `(boolean, Reason?)`. 
 throws into a Future, so `Wait` never comes back empty on you. See
 [Reasons](/docs/concepts/reasons).
 
+## OpOf
+
+```luau
+type OpOf<O, K> = { Id: string, Kind: K } & index<O, K>
+```
+
+One kind out of your op map, for a reducer that gives each kind its own function. See [with named
+ops](/docs/concepts/advanced-reducers#with-named-ops).
+
+```luau
+local function SpendGold(State: Profile, Op: Ledger.OpOf<Ops, "SpendGold">): Profile?
+	return SetPath(State, { "Gold" }, State.Gold - Op.Amount)
+end
+```
+
 ## Reducer
 
 ```luau
-type Reducer<S> = (State: S, Op: Op) -> S?
+type Reducer<S, O = any> = (State: S, Op: Op<O>) -> S?
 ```
 
 See [Writing a reducer](/docs/concepts/reducer).
@@ -39,7 +58,7 @@ See [Writing a reducer](/docs/concepts/reducer).
 ```luau
 type Reason =
 	"Refused" | "Busy" | "Spent" | "Unresolved" | "Closed"
-	| "Backlog" | "Full" | "Invalid" | "Behind"
+	| "Backlog" | "Full" | "Invalid" | "Behind" | "Held"
 ```
 
 Compare against `Ledger.Reason.Refused` and friends rather than the literals. See
@@ -75,6 +94,74 @@ type Config<D> = {
 ```
 
 What `Ledger.New` takes. See [Ledger.New](/docs/reference/ledger#ledgernew).
+
+## TypedConfig
+
+```luau
+type TypedConfig<D, O> = {
+	read Name: string,
+	read Reducer: (State: D, Op: Op<O>) -> D?,
+	read Default: D,
+	read Balance: string?,
+	read Migrations: { Migration }?,
+	read Keys: KeysMode?,
+	read OnLoadFailed: ((Player: Player, Why: Reason) -> boolean)?,
+}
+```
+
+What `Ledger.NewTyped` takes. The reducer gets the op as one of the kinds you named, and it has to
+give back your state or `nil`. See [Typed ops](/docs/concepts/typed-ops).
+
+## TypedStore and TypedSession
+
+```luau
+type TypedStore<D, O>
+type TypedSession<S, O>
+```
+
+What `Ledger.NewTyped` hands back, and what `Store:Expect` gives you on one. They carry the same
+methods as `Store<D>` and `Session<S>`, with `Apply`, `Commit` and `Edit` checked against the ops you
+named.
+
+```luau
+local function Buy(Session: Ledger.TypedSession<Profile, Ops>, Item: string)
+	return Session:Apply("Buy", { Item = Item })
+end
+```
+
+## OpMap
+
+```luau
+type OpMap = { [string]: { [any]: any } }
+```
+
+The shape a map of ops has: the kind, and the fields that kind carries. Annotate your own map with it
+to catch a malformed entry where you write it.
+
+```luau
+export type Ops = {
+	Buy: { Item: string },
+	AddGold: { Amount: number },
+}
+```
+
+## Record
+
+```luau
+type Record<D> = {
+	Snapshot: D?,
+	Bytes: number?,
+	Ops: { Op },
+	Seen: { string },
+	Version: number?,
+	Floor: number?,
+	Envelope: number?,
+	Erased: number?,
+}
+```
+
+What [`Store:Inspect`](/docs/reference/store) hands back. It's a frozen copy, so nothing you do to it
+reaches what the server folds from.
 
 ## Migration
 

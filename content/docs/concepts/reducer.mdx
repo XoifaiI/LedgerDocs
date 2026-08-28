@@ -115,6 +115,10 @@ weeks, possibly written by a version of your game that doesn't exist anymore. Ch
 way in. A reducer that does `State.Gold -= Op.Amount` without checking `Op.Amount` is a number will
 happily hand you `nil` gold and take the profile with it.
 
+Naming your ops does that checking for you. `Ledger.NewTyped` takes a map of the kind to the fields
+it carries, and then `Op.Amount` is a number inside the branch that handles it. See [Typed
+ops](/docs/concepts/typed-ops).
+
 ## Coming from Rodux or Redux
 
 The shape is close enough that people reach for it straight away. An op is an action, `Op.Kind` is

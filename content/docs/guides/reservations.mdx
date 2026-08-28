@@ -77,6 +77,11 @@ That means a busy key looks after itself and a quiet one does not. If a key gets
 week, that reservation holds its unit until the next one arrives. Call `Release` when the player
 walks away and you never depend on it.
 
+One key holds 256 reservations at once. Past that `Reserve` answers
+[`Refused`](/docs/concepts/reasons), which in practice means they are being made faster than they are
+being confirmed or released. Erasing a key hands over any reservation with a `To` before the key
+goes, so a deletion doesn't take units somebody else was owed.
+
 ## Handing the units to another key
 
 `Confirm` spends the units where they are. `Grant` moves them somewhere else.

@@ -146,6 +146,53 @@ end
 A missing handler returns `nil`, which is a refusal. An old server should refuse a kind it has never
 heard of. See [ops you don't know](/docs/concepts/reducer#ops-you-dont-know).
 
+### With named ops
+
+A store built with [`NewTyped`](/docs/concepts/typed-ops) hands its reducer the op as one of your
+kinds, so the handler table above will not build against it. A handler typed `Ledger.Op` is wider
+than the reducer that store asks for.
+
+Narrow on `Op.Kind` first and give each kind its own function. `Ledger.OpOf` picks one kind out of
+the map:
+
+```luau
+type Ops = {
+	SpendGold: { Amount: number },
+	LevelPet: { PetId: string },
+}
+
+local function SpendGold(State: Profile, Op: Ledger.OpOf<Ops, "SpendGold">): Profile?
+	if Op.Amount <= 0 or Op.Amount > State.Gold then
+		return nil
+	end
+	return SetPath(State, { "Gold" }, State.Gold - Op.Amount)
+end
+
+local function LevelPet(State: Profile, Op: Ledger.OpOf<Ops, "LevelPet">): Profile?
+	if State.Pets[Op.PetId] == nil then
+		return nil
+	end
+	return SetPath(State, { "Pets", Op.PetId, "Level" }, State.Pets[Op.PetId].Level + 1)
+end
+
+local function Reducer(State: Profile, Op: Ledger.Op<Ops>): Profile?
+	if Op.Kind == "SpendGold" then
+		return SpendGold(State, Op)
+	elseif Op.Kind == "LevelPet" then
+		return LevelPet(State, Op)
+	end
+
+	return nil
+end
+```
+
+`Op.Amount` is a number and `Op.PetId` is a string inside their own handlers, so every `type(...)`
+check in this section is gone.
+
+The if chain comes back with it. A table lookup cannot tell the checker which kind it found, so
+narrowing needs the comparison. Keep the handler table and build that store with `Ledger.New` if
+the dispatch matters to you more than the field types do.
+
 <Callout type="warn">
   Don't put a `__` prefix on your own kinds. Ledger reserves that for its transfer and transaction
   ops, and `Apply` refuses them with [`Invalid`](/docs/concepts/reasons).

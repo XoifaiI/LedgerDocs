@@ -1,0 +1,148 @@
+---
+title: Typed ops
+description: Name what each op carries and the checker holds every write against it.
+---
+
+An op is `{ Id, Kind, ...whatever you passed }`. Ledger can't know which fields a kind carries, so
+`Op.Amount` reads as `unknown` in strict mode and a misspelled `Kind` is a refusal you find while
+playing.
+
+Name your ops and both of those become build errors.
+
+## Naming them
+
+A map of the kind to the fields that kind carries:
+
+```luau
+export type Profile = {
+	Gold: number,
+	Items: { [string]: boolean },
+}
+
+export type Ops = {
+	Buy: { Item: string },
+	Sell: { Item: string },
+	AddGold: { Amount: number },
+}
+```
+
+Then build the store with `Ledger.NewTyped` and hand it both:
+
+```luau
+local Store = Ledger.NewTyped<<Profile, Ops>>({
+	Name = "PlayerData",
+	Default = { Gold = 100, Items = {} },
+	Reducer = Reducer,
+})
+```
+
+## What gets checked
+
+```luau
+Session:Apply("Buy", { Item = "Sword" }) -- fine
+Session:Apply("Byu", { Item = "Sword" }) -- no kind by that name
+Session:Apply("Buy", { Item = 42 })      -- Item is a string
+Session:Apply("Buy", { Amount = 5 })     -- those are AddGold's fields
+```
+
+A call that matches no kind lists the ones that do. The error names every op your store writes.
+
+`Session:Commit` and `Store:Edit` take the same check. `Edit` has the key first.
+
+A field your kind doesn't name rides along rather than failing. That's what keeps `Once` working:
+
+```luau
+Session:Apply("Buy", { Item = "Sword", Once = "order1" })
+```
+
+So a misspelled field is caught when it means the real one is missing, which is the usual way you
+make that mistake, and a spare field next to a complete set is not.
+
+## The reducer
+
+`Ledger.Op<Ops>` is the op as one of your kinds. Testing `Op.Kind` narrows to that kind, and its
+fields come out typed:
+
+```luau
+local function Reducer(State: Profile, Op: Ledger.Op<Ops>): Profile?
+	if Op.Kind == "Buy" then
+		local Cost = Prices[Op.Item]
+		if Cost == nil or Cost > State.Gold then
+			return nil
+		end
+
+		local Next = table.clone(State)
+		Next.Gold -= Cost
+		Next.Items = table.clone(State.Items)
+		Next.Items[Op.Item] = true
+		return Next
+	elseif Op.Kind == "AddGold" then
+		local Next = table.clone(State)
+		Next.Gold += Op.Amount
+		return Next
+	end
+
+	return nil
+end
+```
+
+`Op.Item` is a string and `Op.Amount` is a number. There's no `type(Op.Amount) == "number"` and no
+`Op.Item :: string` anywhere. Reading a field off the wrong kind is an error where you read it:
+
+```luau
+if Op.Kind == "Buy" then
+	return Op.Amount -- Key 'Amount' not found in { Id: string, Item: string, Kind: "Buy" }
+end
+```
+
+## An op with no fields
+
+A kind takes its fields whether or not it has any:
+
+```luau
+export type Ops = {
+	Prestige: {},
+}
+
+Session:Apply("Prestige", {})
+```
+
+## Your state gets checked too
+
+The `Field` argument to `Reserve`, `Bump` and `Total` has to name a number field on your state:
+
+```luau
+Store:Reserve(UserId, "Gold", 1, "order1") -- fine
+Store:Reserve(UserId, "Glod", 1, "order1") -- no field by that name
+Store:Reserve(UserId, "Name", 1, "order1") -- Name isn't a number
+```
+
+That threw at the call before. Now it doesn't build.
+
+Your reducer is held to giving back your state or `nil` as well, so one that hands back something
+else stops building instead of having its answer thrown away at runtime.
+
+## What doesn't change
+
+Everything else on the store. `Peek`, `Transfer`, `Reserve`, `Tx` and the rest keep the signatures
+they have on an untyped store, and a typed store loads, folds, saves and recovers through the same
+code. Nothing about it differs at runtime.
+
+The call shape doesn't change either. Both views take the kind and the fields as two arguments, so
+moving a store to `NewTyped` doesn't touch a call site.
+
+`Ledger.New` is unchanged. A store built with it takes any kind with any fields. That's what you
+want while the ops are still moving around, and naming them is something you do when you want it.
+
+## Types
+
+`Ledger.TypedStore<D, O>` and `Ledger.TypedSession<S, O>` name the two views, the same way
+`Ledger.Store<D>` and `Ledger.Session<S>` name the open ones.
+
+```luau
+local function Buy(Session: Ledger.TypedSession<Profile, Ops>, Item: string)
+	return Session:Apply("Buy", { Item = Item })
+end
+```
+
+See [Types](/docs/reference/types).
