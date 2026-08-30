@@ -9,7 +9,7 @@ description: Install Ledger, build a store, load a player.
   <Tab value="Wally">
 ```toml
 [dependencies]
-Ledger = "xoifaii/ledger@4.3.1"
+Ledger = "xoifaii/ledger@4.4.0"
 ```
   </Tab>
   <Tab value="Rojo">
@@ -176,9 +176,16 @@ transfer or a transaction settles.
 
 ## Running without a datastore
 
+`Mock = true` puts a store on an in memory datastore and it never touches `DataStoreService`. Real
+limits, no API access, no published place.
+
 ```luau
-Ledger.UseMock({ Players = 30 })  -- every store goes in memory, real limits, no API access
-Ledger.UseReal()                  -- back to the real datastore
+local Store = Ledger.New({
+	Name = "PlayerData",
+	Default = { Gold = 100, Items = {} },
+	Reducer = Reducer,
+	Mock = true,
+})
 ```
 
 The mock is stricter than Studio on purpose, because Studio hands you request budgets a live server

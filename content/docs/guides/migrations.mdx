@@ -103,8 +103,8 @@ which is what you want, and the errors stop as soon as the deploy finishes.
 ## Don't drop something Default still declares
 
 If a migration removes a field but `Default` still lists it, the reconcile puts it straight back on
-every load and your migration does nothing. Ledger checks for this at `Ledger.New` and warns with
-the field name.
+every load and your migration does nothing. Nothing warns about this. Ledger cannot tell a field you
+meant to drop from one you meant to keep.
 
 Take it out of `Default` at the same time you write the migration to remove it.
 
@@ -113,6 +113,26 @@ Take it out of `Default` at the same time you write the migration to remove it.
 Migrations have to be pure and can't yield, same as the reducer.
 
 They have to return a table. Returning anything else errors on load with the step number.
+
+Leave anything starting with an underscore alone. Those are Ledger's own fields, the money set aside
+for a transfer, the applied names, the units reserved and the tally. A migration that rebuilds the
+state from scratch drops them, so Ledger puts them back after every step and names the step that did
+it. Copy the state and change what you meant to change:
+
+```luau
+-- keeps everything it did not mean to touch
+function(State)
+	local Next = table.clone(State)
+	Next.Gold = State.Coins or 0
+	Next.Coins = nil
+	return Next
+end
+
+-- drops Ledger's bookkeeping along with the old fields
+function(State)
+	return { Gold = State.Coins or 0 }
+end
+```
 
 Never reorder them, never delete one, never edit one that's already shipped. The list index is the
 version, so changing it changes what every existing record means.
@@ -150,6 +170,10 @@ end
 Delete it and the fold leaves out that gold and that pet, the key stops compacting with a warning
 naming the kind, and the log grows until writes answer [`Full`](/docs/concepts/reasons). Put the
 branch back and both return.
+
+`Reset` does not get a key out of that. It writes the default state as another op, so the op it cannot
+apply is still the oldest one and the log still cannot compact. It says so when you try. Only a build
+that folds the op, or erasing the key, clears it.
 
 Do not swap it for a branch that accepts the op and changes nothing. The state goes the same way,
 and this time the key compacts, so the snapshot keeps that result:

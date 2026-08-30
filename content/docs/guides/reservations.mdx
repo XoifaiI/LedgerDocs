@@ -40,7 +40,9 @@ Shop:Release("sword", OrderId):Wait()   -- the unit goes back, stock returns to 
 ```
 
 Asking to reserve under a name that already holds something answers `true` and holds nothing extra,
-so a retry is safe.
+so a retry is safe. Once those units have gone, whether they were confirmed, released or given back,
+the same name answers [`Spent`](/docs/concepts/reasons). A reservation name is a handle on live units,
+not a receipt.
 
 ### One key is one item
 
@@ -70,8 +72,9 @@ purchase wait behind every other.
 
 ### Nobody has to clean up
 
-A reservation nobody confirms would hold its unit forever. The next `Reserve` on that key gives back
-anything older than 15 minutes, so the stock returns on its own.
+A reservation nobody confirms would hold its unit forever. A reservation holds for 15 minutes, and the
+next `Reserve` on that key gives back anything older than 25. The extra 10 minutes is the margin that
+stops a hand over racing the refund.
 
 That means a busy key looks after itself and a quiet one does not. If a key gets one reservation a
 week, that reservation holds its unit until the next one arrives. Call `Release` when the player
@@ -108,6 +111,10 @@ The mark is what stops anything else deciding in the meantime. `Release` and `Co
 Once the grant is finished, `Confirm` answers `false`. The units went to the other key, so there is
 nothing here to spend.
 
+The hold is a deadline for `Grant` and not for `Confirm`. Past it `Grant` answers
+[`Spent`](/docs/concepts/reasons) and leaves the units set aside for recovery. A late hand over could
+put them on both keys. `Confirm` still spends them, as long as nothing has given them back yet.
+
 If the receiving key was erased, `Grant` answers `Held` and the units stay set aside until recovery
 gives them back.
 
@@ -125,6 +132,11 @@ Shop:Grant("sword", OrderId):Wait()
 Every step is idempotent under the same `OrderId`, so running the whole thing again after a crash
 lands exactly once. A transfer under a name that already moved answers finished, and a grant that
 already delivered adds nothing.
+
+Don't use the reservation name to work out whether a purchase already happened. Once the key compacts,
+a repeat `Confirm` answers [`Unresolved`](/docs/concepts/reasons). The state can't tell you either. A
+confirmed, a released and an expired reservation all leave the same absence. Put a
+[`Once`](/docs/concepts/once) name on the op that grants the item and ask `DidApply`.
 
 Die before the payment and the reservation is given back on its own. Nothing was taken and nothing
 was handed over.
@@ -158,8 +170,9 @@ local Pot = Events:Total("summerpot", "Gold"):Wait()
 
 `Total` reads all 16 shards, so it costs 16 requests. Read it on a timer and cache it.
 
-`Total` answers what has been added, not what the 16 keys hold. Each one starts at whatever your
-`Default` says the field is, so that baseline is taken back off. A tally nobody has added to reads 0.
+`Total` answers what has been added, not what the 16 keys hold. `Bump` keeps its own running count on
+each shard and never touches the field your reducer owns, so the `Default` never counts toward the
+total. A tally nobody has added to reads 0.
 
 ### A total can only go up
 

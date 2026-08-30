@@ -84,12 +84,4 @@ reducer.
 Ledger is server side only. It doesn't replicate to clients, it doesn't do leaderboards or ordered
 stores, and it won't hide a reducer that's wrong. If your reducer reads `os.time()` or
 `math.random()`, two servers will fold the same log into different state. Ledger warns about that in
-Studio rather than hiding it.
-
-<Callout type="info">
-  Ledger is tested the way TigerBeetle tests a database. It runs against a simulated datastore that
-  drops writes, reports success for writes it dropped, corrupts records, splits servers apart, kills
-  them halfway through a write, and moves the clock. Everything comes off one seed, so a failure
-  replays exactly. The transaction protocol also goes through an exhaustive interleaving search. See
-  [Testing](/docs/guides/testing).
-</Callout>
+Studio.

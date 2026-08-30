@@ -164,7 +164,10 @@ On a [typed store](/docs/concepts/typed-ops) that rule is checked, so a `Field` 
 field of your state stops the build rather than throwing at the call. `Bump` and `Total` take the
 same check.
 
-Asking again under a name already set aside answers `true` and sets nothing aside a second time.
+Asking again under a name already set aside answers `true` and sets nothing aside a second time. Once
+those units have gone, confirmed, released or given back, the same name answers
+[`Spent`](/docs/concepts/reasons) and sets nothing aside.
+
 Asking for more than the field holds answers `Refused`, and so does asking while a key already holds
 256 reservations at once. That is far more than a key is meant to carry, so reaching it means they
 are being made faster than they are being confirmed or released.
@@ -180,8 +183,8 @@ A reservation only keeps its units past 30 days if a `Grant` started handing it 
 answered. Ledger cannot tell whether those units arrived, so it says so and leaves them for you to
 sort out. One that was never handed over gets its units back however long it has been sitting.
 
-A reservation nobody takes is given back once its hold runs out, either by the next `Reserve` on that
-key or by the recovery sweep.
+A reservation nobody takes is given back 10 minutes after its hold runs out, either by the next
+`Reserve` on that key or by the recovery sweep.
 
 See [Reservations](/docs/guides/reservations).
 
@@ -199,6 +202,10 @@ not spent here.
 
 Answers [`Held`](/docs/concepts/reasons) while a `Grant` is handing those units over. They are not on
 this key to spend, and only recovery can say where they ended up.
+
+Once the op that confirmed it has been folded into the snapshot, asking again answers
+[`Unresolved`](/docs/concepts/reasons). The record cannot say any more whether that op took or was
+turned away. The units were still spent exactly once.
 
 ### Release
 

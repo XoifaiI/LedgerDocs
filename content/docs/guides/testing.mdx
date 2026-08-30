@@ -5,46 +5,41 @@ description: The mock datastore, the swappable clock, and how Ledger itself is t
 
 ## The mock
 
-`Ledger.UseMock()` swaps every store onto an in memory datastore. No API access, no published place,
-no network.
+`Mock = true` puts a store on an in memory datastore. No API access, no published place, no network.
 
 ```luau
-local Service = Ledger.UseMock({ Players = 30 })
-
--- build stores and run your game as normal
-
-Ledger.UseReal()
+local Store = Ledger.New({
+	Name = "Test",
+	Default = { Gold = 0 },
+	Reducer = Reducer,
+	Mock = true,
+})
 ```
 
-Call it one time, and call it early. Every store reads the backend on every request, so a store you
-built before the call moves onto the mock as well, and a second call anywhere puts every store on a
-fresh empty one. Everything written up to that point stops reading back, and a key folds to your
-`Default` as though it had never been touched. Ledger warns if stores are live when it happens.
+### Sizing it
 
-`Players` is how many players to size the request budget for, since Roblox's budget formula is a
-base plus a per player allowance. Set it to what a real server of yours looks like.
+Pass a table instead of `true` to say what size of server to pretend to be.
 
-There are two budgets. One is for this server and one is for the whole experience. `Players` sizes
-the first, `CCU` sizes the second, and `CCU` defaults to `Players`. The smaller one stops you first:
+`Players` is how many players to size the request budget for, since Roblox's budget formula is a base
+plus a per player allowance. Set it to what a real server of yours looks like.
+
+There are two budgets. One is for this server and one is for the whole experience. `Players` sizes the
+first, `CCU` sizes the second, and `CCU` defaults to `Players`. The smaller one stops you first:
 
 ```luau
-Ledger.UseMock({ Players = 30 })                --> 900 writes, 1260 reads, 65 lists
-Ledger.UseMock({ Players = 30, CCU = 10000 })   --> 1260 writes, 1260 reads, 65 lists
+Mock = { Players = 30 }                --> 900 writes, 1260 reads, 65 lists
+Mock = { Players = 30, CCU = 10000 }   --> 1260 writes, 1260 reads, 65 lists
 ```
 
 Leave `CCU` alone to test against the tighter of the two. Raise it to see what a server does once the
 experience budget is no longer the limit.
 
-`Service:GetRequestBudgetForRequestType` reports the per server budget only, the same as the real
-API. On the first line above, writes stop at 900 while it still reports 1260.
-
-The number leaves the experience budget out, so it can read higher than what you can actually spend.
-A low reading still means you are short. Ledger only uses it to back off. A low reading makes it skip
-an autosave and warn, and it never treats a high one as room to write.
-
 `Throttled` defaults to true and is what makes the mock worth using. With it on you get real request
 budgets, real refill rates, real queueing, and a real throughput cap per key. Turn it off with
 `Throttled = false` when you're testing logic and don't want to wait around.
+
+The fake datastore is sized once. The first store built with `Mock` sets it, and a later one asking for
+a different size throws where it was written. A plain `Mock = true` joins whatever is already there.
 
 <Callout type="warn">
   The mock is stricter than Studio on purpose. Studio hands you request budgets a live server never
@@ -55,24 +50,6 @@ budgets, real refill rates, real queueing, and a real throughput cap per key. Tu
 What the mock keeps from the real thing: the 50 character name and key limits, the 4 MB value limit,
 30 versions of history, JSON only values, and paged listing.
 
-## The clock
-
-`Ledger.UseClock` swaps out the function Ledger reads the time from.
-
-```luau
-local Now = 0
-Ledger.UseClock(function()
-	return Now
-end)
-
-Now += 8 * 86400  -- jump a week forward
-
-Ledger.UseClock(nil)  -- back to os.time
-```
-
-Everything with a deadline reads through this, so you can jump forward and watch the expiry paths
-run instead of waiting a week for them.
-
 ## Studio checks
 
 Some checks only run in Studio, because they cost too much to run live.
@@ -80,88 +57,27 @@ Some checks only run in Studio, because they cost too much to run live.
 Ledger refolds the log after every commit and compares it against live state. If they don't match,
 your reducer isn't deterministic, and the warning names the field that moved.
 
-`Ledger.New` also warns when a migration drops a field that `Default` still declares, since the
-reconcile just puts it back and your migration does nothing.
-
-Both of these are bugs to fix. The checks only run in Studio, so on a live server you get no warning
-and the same broken behaviour.
+That is a bug to fix. The check only runs in Studio, so on a live server you get no warning and the
+same broken behaviour.
 
 ## Writing tests
 
-The pattern that works is: mock on, build the store, drive it, assert on `Peek`.
+The pattern that works is: build the store on the mock, drive it, assert on `Peek`.
 
 ```luau
-Ledger.UseMock({ Players = 8, Throttled = false })
-
 local Store = Ledger.New({
 	Name = "Test",
 	Default = { Gold = 100 },
 	Reducer = Reducer,
 	Balance = "Gold",
+	Mock = { Players = 8, Throttled = false },
 })
 
 Store:Edit(1, "SpendGold", { Amount = 30 }):Wait()
 assert(Store:Peek(1):Wait().Gold == 70)
 
 Store:Destroy()
-Ledger.UseReal()
 ```
 
 `Store:Destroy()` frees the name, so the next test can build a store called `Test` again. Without it
 you'll get a name clash.
-
-Two servers is just two stores over the same mock service, since they're both reading and writing
-the same in memory keys. That's how you test the parts that only go wrong under a race.
-
-## How Ledger itself is tested
-
-Three things, and they find different problems.
-
-### Deterministic simulation
-
-The idea comes from [TigerBeetle](https://tigerbeetle.com). Ledger runs against a fake datastore, and
-the fake one misbehaves on purpose. It drops writes. It reports success for a write it dropped. It
-corrupts records, splits servers apart, kills them halfway through a write, and moves the clock.
-
-Everything random comes from one seed, including the scheduler that picks which of the eight
-simulated servers runs next. A run is a pure function of its seed, so a failure replays exactly and
-you can debug it like anything else.
-
-### Exhaustive enumeration
-
-Random simulation samples orderings. It finds bugs. It cannot tell you there are none left, because
-you never know what it did not try.
-
-So the marker protocol goes through an enumerator as well. It walks the orderings instead of sampling
-them. It runs a depth first search over every point where the scheduler could stop one server and
-start another, and it checks the safety properties at every step, not only at the end.
-
-The search is bounded by how many times one run may switch servers. That bound is what makes it
-finish. Most real concurrency bugs need very few switches, so a small bound still reaches them.
-
-A model checker like TLC does this to a TLA+ spec. There is one difference.
-
-<Callout type="warn">
-  Ledger has no TLA+ specification. Nothing here is a proof.
-</Callout>
-
-A TLA+ spec checks a model of the design. It is exhaustive and it works at any scale, but it cannot
-tell you the code matches the model. Ledger's enumerator runs the real `src` modules, so it clears
-the code you ship. It clears it only up to the preemption bound, and only for the scenarios someone
-wrote down. Neither one replaces the other.
-
-### Mutation testing
-
-This one checks the other two. Known defects go into the source on purpose, one at a time, and the
-suite is scored on how many it catches. A suite that stays green against a broken Ledger is not
-testing anything.
-
-It has already removed harnesses that looked thorough and caught nothing.
-
-### The properties
-
-All three assert the same four things.
-
-Money is conserved, so a transfer never creates any and never destroys any. A transaction applies to
-all of its keys or to none of them. No balance goes negative. Nothing is still pending at the end of
-a run, so money never sits stuck in escrow.

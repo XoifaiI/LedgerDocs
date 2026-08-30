@@ -5,6 +5,46 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.4.0
+
+```diff
++ Mock takes Players, CCU and Throttled
++ Reset says when the key it reset still cannot compact, and what will clear it
+
+- A migration that rebuilt the state dropping the money set aside, the applied names, the reservations and the tally
+- Reserve answering true under a name whose units had already gone, without setting anything aside
+- A transaction leg landing on a key that was erased, with nothing said about it
+- An older build being able to rewrite the op list of a record it cannot read
+- One store's transaction clean up list skipping the keys another store in the same game had filled
+
+! Reserve answers Spent under a name whose units have gone, where it used to answer true
+! A transaction leg is turned away from a key that was erased, for the 8 days its tombstone lasts
+```
+
+### Upgrading
+
+**Migrations.** A migration is handed the stored state, and that carries Ledger's own fields next to
+yours. One that copies the state and changes what it needs has always kept them:
+
+```luau
+local Next = table.clone(State)
+Next.Gold = State.Coins or 0
+Next.Coins = nil
+return Next
+```
+
+**Reserve.** Asking again under a name that still holds units answers `true` and sets nothing aside
+twice, the same as before. Under a name whose units have gone, confirmed, released or given back, it
+answers [`Spent`](/docs/concepts/reasons) where it used to answer `true` while setting nothing aside.
+Nothing could be spent twice either way, since `Confirm` refuses a reservation that isn't there. The
+answer was wrong.
+
+A reservation name is a handle on live units rather than a receipt. To know later whether a purchase
+happened, put a [`Once`](/docs/concepts/once) name on the op that grants the item and ask `DidApply`.
+
+**Transactions and erased keys.** A leg on a key that was erased used to land, so money arrived on a
+key the erase was meant to empty.
+
 ## 4.3.1
 
 ```diff

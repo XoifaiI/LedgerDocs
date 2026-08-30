@@ -25,6 +25,7 @@ misbehave later.
 | `Migrations` | `{ Migration }?` | See [Migrations](/docs/guides/migrations). |
 | `Keys` | `"Player" \| "String"` | Defaults to `"Player"`. |
 | `OnLoadFailed` | `((Player, Reason) -> boolean)?` | What to do when a load fails. See below. |
+| `Mock` | `boolean \| { Players: number?, CCU: number?, Throttled: boolean? }` | Puts this store on an in memory datastore, sized how you ask. See [Testing](/docs/guides/testing). |
 
 The name caps at 47 rather than the datastore's 50 because Ledger also creates `<Name>_Tx` for
 transaction markers.
@@ -111,47 +112,6 @@ Ledger.Reason.Full
 Ledger.Reason.Invalid
 Ledger.Reason.Behind
 ```
-
-## Ledger.UseMock
-
-```luau
-Ledger.UseMock(Options: { Players: number?, CCU: number?, Throttled: boolean? }?) -> Service
-```
-
-Points every store at an in memory datastore, including ones you built before the call.
-
-Call it one time. Each call hands back a fresh empty service, and every store moves onto it, so a
-second call anywhere in your game makes everything written up to that point unreadable. Ledger warns
-if it catches you doing it while stores are live.
-
-| Option | | |
-| --- | --- | --- |
-| `Players` | `number?` | How many on this server. Defaults to 0. Sizes the per server budget. |
-| `CCU` | `number?` | How many in the whole experience. Defaults to `Players`. Sizes the experience budget. |
-| `Throttled` | `boolean?` | Defaults to true. |
-
-Both budgets apply at the same time. The smaller one stops you first, the same as a real server. See
-[Testing](/docs/guides/testing).
-
-## Ledger.UseReal
-
-```luau
-Ledger.UseReal() -> ()
-```
-
-Back to the real `DataStoreService`. Only affects stores built after the call.
-
-## Ledger.UseClock
-
-```luau
-Ledger.UseClock(Reads: (() -> number)?, Sleeps: ((Seconds: number) -> ())?) -> ()
-```
-
-Swaps the function Ledger reads the time from. Pass `nil` to go back to `os.time`.
-
-`Sleeps` swaps the wait Ledger polls on, and defaults to `task.wait`. There is one poll, in
-[`Session:CommitOp`](/docs/reference/session), where a commit waits on a transaction another server
-parked on the key. Its deadline is read off your clock.
 
 ## Ledger.Sweep
 

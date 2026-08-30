@@ -107,6 +107,23 @@ than something it tries to merge.
 Don't put `Once` on a leg. The transaction id already makes every leg land at most one time, and
 Ledger throws if it sees one.
 
+### A leg will not land on an erased key
+
+A key that was [erased](/docs/guides/recovery) turns a leg away for the 8 days its tombstone lasts,
+and the whole transaction answers [`Refused`](/docs/concepts/reasons) with a warning naming the key.
+Nothing is applied to any of the other keys.
+
+```luau
+Store:Erase("shop"):Wait()
+
+Store:Tx("order1", {
+	{ Key = "player", Kind = "Pay", Fields = { Amount = 25 } },
+	{ Key = "shop", Kind = "Take", Fields = { Amount = 25 } },
+}):Wait()   --> false, Refused
+```
+
+Once the tombstone runs out the key takes legs again.
+
 ### A leg reads what is stored, not what a session is holding
 
 Every leg folds the record on the datastore. A live session that has taken ops through
