@@ -5,6 +5,17 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.4.1
+
+```diff
++ Buffers in the fake datastore stored with zstd rather than base64
++ Transactions check for any pending ids
+```
+
+### Upgrading
+
+Install the new version. The stored record does not change. Your code does not change.
+
 ## 4.4.0
 
 ```diff
