@@ -5,6 +5,37 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 4.5.0
+
+```diff
++ Clearer warnings
++ Erase answers Unresolved when it cannot read the key first, and leaves it alone
+
+- An edit that only held if a parked transaction did not go through being written, and the key never compacting again once it did
+- A session that outlived the 8 days of an erase mark closing on its next save, and losing what it had applied since
+- A session filled to its byte cap during a datastore outage never saving again once the datastore came back
+- A transaction with a buffer in a leg answering Spent when asked again with the same buffer
+- A player who rejoined inside the 8 days after an erase being called a session on another server
+- A migration that copies the state being told it had dropped Ledger's own fields
+- Erase burying a key it could not read, and the money set aside on it with it
+
+! An Edit that only holds if a parked transaction does not go through answers Unresolved and is not written
+! An Apply in the same position waits until the transaction settles, then lands or is turned away
+! A reducer or migration that writes a field starting with an underscore is warned about as your mistake, not as a Ledger bug
+```
+
+### Upgrading
+
+Install the new version. The stored record does not change.
+
+**Edits beside a parked transaction.** An `Edit` that holds on the key as it is, but not once the parked
+transaction goes through, used to be written and answer `Unresolved`. It still answers
+[`Unresolved`](/docs/concepts/reasons), and nothing is written. Ask again once the transaction settles.
+An `Apply` in the same position stays queued until then. Nothing changes for an op that holds either way.
+
+**Erase.** When the key cannot be read before the hand over, `Erase` answers `Unresolved` and the key
+stays as it was. Ask again. It used to bury the key and warn that the money was gone.
+
 ## 4.4.1
 
 ```diff
