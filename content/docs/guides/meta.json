@@ -8,6 +8,7 @@
     "transactions",
     "migrations",
     "recovery",
-    "testing"
+    "testing",
+    "typescript"
   ]
 }

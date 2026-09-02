@@ -1,0 +1,147 @@
+---
+title: Using Ledger from TypeScript
+description: The npm package for roblox-ts, and the handful of things the declaration does that you'd want to know about.
+---
+
+Ledger is on npm as `@xoifail/ledger`. It's the same Luau you get from Wally with a declaration file
+sitting next to it, so nothing is compiled, nothing is wrapped, and it behaves exactly the way the
+rest of these pages describe. Every type is there under `Ledger.`, with the names the
+[reference](/docs/reference/types) uses.
+
+```
+npm install @xoifail/ledger
+```
+
+## Getting it into the place
+
+roblox-ts only syncs `node_modules/@rbxts` on its own. This package lives under `@xoifail`, so if
+you don't tell Rojo about that folder the require fails at runtime with a module it can't find. Add
+one line to `default.project.json`, next to the `@rbxts` one:
+
+```json
+"node_modules": {
+	"$className": "Folder",
+	"@rbxts": { "$path": "node_modules/@rbxts" },
+	"@xoifail": { "$path": "node_modules/@xoifail" }
+}
+```
+
+Then import it in a server script. It still asserts it's on the server, same as in Luau.
+
+```ts
+import Ledger from "@xoifail/ledger";
+```
+
+## Calling it
+
+There's nothing to learn here. The declaration knows which methods take a self, so you write dot
+calls everywhere and the compiler puts the colon in where Ledger wants one. Futures still have
+`Wait`, and the `(boolean, Reason?)` every write answers with comes out as a pair you destructure:
+
+```ts
+const [ok, why] = session.Apply("SpendGold", { Amount: 25 });
+const [state, readWhy] = store.Peek(userId).Wait();
+```
+
+`Ledger.Reason` is both the type and the constants, so `why === Ledger.Reason.Busy` works the same
+way it does in Luau, and a `switch` over it can end in `never`.
+
+The one thing to decide is where the state type comes from. `Ledger.New` reads it off the reducer or
+off `Default`, whichever you've annotated. When both are inline, say it yourself:
+
+```ts
+const Store = Ledger.New<Profile>({ Name: "PlayerData", Default: { Gold: 100 }, Reducer });
+```
+
+## Typed ops
+
+This is where the declaration earns its place. Name the ops as an interface and hand `NewTyped`
+both types:
+
+```ts
+interface Profile {
+	Gold: number;
+	Items: { [item: string]: boolean };
+}
+
+interface Ops {
+	Buy: { Item: string };
+	AddGold: { Amount: number };
+	Prestige: {};
+}
+
+const Store = Ledger.NewTyped<Profile, Ops>({
+	Name: "PlayerData",
+	Default: { Gold: 100, Items: {} },
+	Reducer: (state, op) => {
+		if (op.Kind === "Buy") {
+			if (state.Items[op.Item]) return undefined;
+			return { ...state, Items: { ...state.Items, [op.Item]: true } };
+		}
+		if (op.Kind === "AddGold") return { ...state, Gold: state.Gold + op.Amount };
+		return undefined;
+	},
+});
+```
+
+`op.Kind === "Buy"` narrows `op` to that arm, so `op.Item` is a string in there and `op.Amount` is
+an error. Every write is held against the map, and the refusals are the ones the
+[typed ops](/docs/concepts/typed-ops) page lists:
+
+```ts
+session.Apply("Buy", { Item: "Sword" });                 // fine
+session.Apply("Buy", { Item: "Sword", Once: "order1" }); // fine, Once rides along
+session.Apply("Byu", { Item: "Sword" });                 // no kind by that name
+session.Apply("Buy", { Item: 42 });                      // Item is a string
+session.Apply("Buy", { Amount: 5 });                     // those are AddGold's fields
+store.Reserve(userId, "Items", 1, "order1");             // Items isn't a number field
+```
+
+There's one check the Luau side doesn't have. A kind that doesn't name its fields as an object,
+`Buy: string`, stops the build at `NewTyped` rather than being ignored.
+
+On a store built with `New`, the op's fields all read as `unknown`, so narrow them with `typeIs`
+the way the Luau examples use `type()`.
+
+## The fields you can't pass
+
+`Id`, `Kind` and `OnceAt` belong to Ledger. In Luau, passing one in `Fields` warns and gets
+overwritten. In TypeScript it doesn't build. `Once` is the one that's yours, and it's allowed on
+every write, typed or not.
+
+## Migrations
+
+A migration step gets `unknown`, because the stored shape is whatever an older build wrote and the
+declaration can't know it. Annotate the parameter with the shape you know it had and the body is
+checked against that:
+
+```ts
+interface Legacy {
+	Coins?: number;
+}
+
+Migrations: [
+	(state: Legacy) => ({ Gold: state.Coins ?? 0, Items: {} }),
+	{ Compatible: true, Apply: (state: Legacy) => ({ ...state, Pets: {} }) },
+],
+```
+
+## Waiting with a timeout
+
+`Wait()` gives you the values. `Wait(seconds)` can give you nothing at all, so in that overload
+every value in the pair is optional and the checker makes you deal with it. The
+[Future](/docs/reference/future) page says why you don't want a timeout on a write anyway.
+
+## Two names
+
+`Ledger.Record<D>` is what `Inspect` hands back, the same as in Luau. It shadows TypeScript's own
+`Record` inside the `Ledger` namespace, which nothing in there needs.
+
+`Ledger.OpMap` is what every op map is held against. You never write it yourself. If you're seeing it
+in an error, one of your kinds isn't naming its fields as an object.
+
+## What isn't checked
+
+Which methods a store takes still depends on `Keys`, and that's not in the type. `Load`, `Get` and
+the other player methods throw at the call on a string keyed store, and `Bump` and `Total` throw on a
+player one, exactly as they do in Luau.

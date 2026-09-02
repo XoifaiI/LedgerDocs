@@ -5,7 +5,7 @@ description: Install Ledger, build a store, load a player.
 
 ## Install
 
-<Tabs items={['Wally', 'Rojo', 'Model file']}>
+<Tabs items={['Wally', 'Rojo', 'Model file', 'roblox-ts']}>
   <Tab value="Wally">
 ```toml
 [dependencies]
@@ -17,6 +17,12 @@ Clone the repo and add `src` to your project, as `ServerStorage/Ledger` or anywh
   </Tab>
   <Tab value="Model file">
 Drop the `Ledger` model anywhere the server can reach. It's one module and it has no dependencies.
+  </Tab>
+  <Tab value="roblox-ts">
+```
+npm install @xoifail/ledger
+```
+See [Using Ledger from TypeScript](/docs/guides/typescript) for the line your project file needs.
   </Tab>
 </Tabs>
 
