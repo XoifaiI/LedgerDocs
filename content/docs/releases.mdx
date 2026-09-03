@@ -12,7 +12,7 @@ The release that takes Ledger to 100k CCU.
 A hold moved off the key and into MemoryStore. A total is summed once a minute for the whole fleet
 instead of once a poll on every server. The reaper and the sweep split a pass between them rather
 than every server doing all of it. Measured at ~5,000 servers, the four workloads
-MemoryStore touches cost **1,170,705 datastore calls a minute on 4.x, and just 958 on 5.0**.
+MemoryStore touches cost **1,170,705 datastore calls a minute on 4.x, to just 958 on 5.0**.
 
 | at 100k CCU, per minute | 4.x | 5.0 |
 | --- | --- | --- |
