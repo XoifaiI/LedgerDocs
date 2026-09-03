@@ -55,10 +55,6 @@ would rather refuse than half apply it. A transfer answers `Spent` for the same 
 again under a name that already went through, for a different amount or a different key, gets `Spent`
 instead of `true`.
 
-For a reservation it means the units that name held have gone. They were confirmed, released or given
-back, and the name cannot set anything aside again. `Grant` also answers `Spent` once the hold has run
-out, and leaves the units where they are for recovery.
-
 `Spent` says this attempt changed nothing. It does not promise the name can never work again. A name
 whose transaction was cancelled before any leg applied is free to use, and that is what lets a retry
 finish a cancelled attempt. A name that already moved money is done.
@@ -77,9 +73,8 @@ Ledger gives it back on its own, and recovery follows that key until it does. Te
 money is coming back rather than that the transfer failed. Don't send it again under a new name, or
 they pay twice.
 
-`Release` and `Confirm` answer it too, while a [`Grant`](/docs/guides/reservations) is handing those
-units to another key. They are not there to give back or to spend, and the grant may already have
-delivered them. Recovery finishes it one way or the other.
+A [reservation](/docs/guides/reservations) never answers it. A hold lives in MemoryStore and takes
+nothing off the key, so there is nothing to be set aside.
 
 ## Unresolved
 

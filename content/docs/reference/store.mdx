@@ -134,13 +134,16 @@ named and the `Fields` against what that kind carries.
 ### Transfer
 
 ```luau
-Store:Transfer(From: KeyLike, To: KeyLike, Amount: number, Id: string?) -> Future<boolean, Reason?>
+Store:Transfer(From: KeyLike, To: KeyLike, Amount: number, Id: string?, Field: string?) -> Future<boolean, Reason?>
 ```
 
-Moves `Amount` of the `Balance` field from one key to another. Needs the store to name a `Balance`.
+Moves `Amount` of a number field from one key to another. `Field` names it, and has to be a number
+field your `Default` declares. Leave it out to move the `Balance` field, which needs the store to
+name one.
 
 `From` and `To` have to be different. `Amount` has to be positive and finite. `Id` is 1 to 64
-characters when given, and giving one makes a retry safe.
+characters when given, and giving one makes a retry safe. A name belongs to one transfer: the same
+`Id` with a different field, amount or pair of keys answers [`Spent`](/docs/concepts/reasons).
 
 A delivery into a key that was erased answers [`Held`](/docs/concepts/reasons). The money left the
 sender and waits with them until recovery gives it back.
@@ -151,61 +154,77 @@ See [Transfers](/docs/guides/transfers).
 
 ```luau
 Store:Reserve(Key: KeyLike, Field: string, Amount: number, Id: string, Options: {
-	Hold: number?,
-	To: KeyLike?
+	Hold: number?
 }?) -> Future<boolean, Reason?>
 ```
 
-Sets `Amount` of a numeric field aside on one key, under the name `Id`. The field drops by that much
-straight away, so nothing else can spend it. `Field` has to name a number field your `Default`
-declares. `Id` is 1 to 64 characters.
+Holds `Amount` of a number field on one key, under the name `Id`, in MemoryStore. The key itself
+does not change: `Peek` shows the full field, and `Holds` shows what is held. `Field` has to name a
+number field your `Default` declares. `Id` is 1 to 64 characters.
 
 On a [typed store](/docs/concepts/typed-ops) that rule is checked, so a `Field` that isn't a number
-field of your state stops the build rather than throwing at the call. `Bump` and `Total` take the
-same check.
+field of your state stops the build rather than throwing at the call. `Bump`, `Total`, `Holds` and
+`Transfer` take the same check.
 
-Asking again under a name already set aside answers `true` and sets nothing aside a second time. Once
-those units have gone, confirmed, released or given back, the same name answers
-[`Spent`](/docs/concepts/reasons) and sets nothing aside.
+Asking again under a name already held answers `true` and holds nothing extra. Once a hold has gone,
+confirmed, released or run out, the same name can be used again.
 
-Asking for more than the field holds answers `Refused`, and so does asking while a key already holds
-256 reservations at once. That is far more than a key is meant to carry, so reaching it means they
-are being made faster than they are being confirmed or released.
+Asking for more than the field has, counting what is already held, answers `Refused`. So does asking
+while a key already holds 256 at once, which means they are being made faster than they are being
+confirmed or released. The stock a hold is judged against is what the key read last, and a refusal
+reads the key again before it answers, so a restock is seen.
 
-`Hold` is how long to keep it, in seconds, and defaults to 15 minutes. It lives on the reservation
-itself, so two reservations on one key can be held for different lengths.
+`Hold` is how long to keep it, in seconds, up to just under 30 days, and defaults to 15 minutes. A
+hold nobody takes runs out on its own. Nothing gives it back, since nothing was taken.
 
-`To` names the key the units are going to, which is what `Grant` needs. Leave it out for a reservation
-you will `Confirm` on the same key. With a `To`, `Hold` has to be just under 30 days or less, so that
-a reservation still runs out inside the window Ledger can settle it in.
+A hold is not in the fold. An `Edit` can spend units another player holds, and that player's
+`Confirm` is then `Refused`. Nothing is oversold, one checkout fails.
 
-A reservation only keeps its units past 30 days if a `Grant` started handing it over and never
-answered. Ledger cannot tell whether those units arrived, so it says so and leaves them for you to
-sort out. One that was never handed over gets its units back however long it has been sitting.
+MemoryStore has to be reachable, which in Studio means API access on. A store with no MemoryStore, or
+one whose MemoryStore is down, answers [`Unresolved`](/docs/concepts/reasons) and holds nothing. The
+reducer still refuses at checkout, so a lost hold costs a refused checkout and never an oversell.
 
-A reservation nobody takes is given back 10 minutes after its hold runs out, either by the next
-`Reserve` on that key or by the recovery sweep.
+The first hold on a key costs one datastore read and four MemoryStore request units. Every hold after
+that costs two units, and a `Release` costs two.
 
 See [Reservations](/docs/guides/reservations).
+
+### Holds
+
+```luau
+Store:Holds(Key: KeyLike, Field: string) -> Future<number?, Reason?>
+```
+
+Answers how many units of `Field` are held on `Key` right now. A key nothing holds answers `0`.
+Costs one MemoryStore request unit.
+
+`nil` and [`Unresolved`](/docs/concepts/reasons) mean the MemoryStore could not be read, never that
+nothing is held.
 
 ### Confirm
 
 ```luau
-Store:Confirm(Key: KeyLike, Id: string) -> Future<boolean, Reason?>
+Store:Confirm(Key: KeyLike, Id: string, Kind: string, Fields: table?) -> Future<boolean, Reason?>
 ```
 
-Spends what `Id` set aside. The units are gone and the field stays where it is.
+Spends what `Id` holds, with your own op. `Kind` and `Fields` are what you would give `Edit`, so your
+reducer decides what a checkout takes off the key and refuses one the field cannot cover. The op's id
+derives from `Id`, so a retry lands once. The hold is let go once the op has gone through.
 
-Answers `false` if nothing is set aside under that name, so a confirm after a release cannot spend the
-same units twice. A `Grant` that already moved the units answers `false` as well, because they were
-not spent here.
+A confirm needs no hold behind it. The reducer is the gate whether a hold stood or not, so a checkout
+whose hold ran out, or was never made because the MemoryStore was down, still sells what is there.
 
-Answers [`Held`](/docs/concepts/reasons) while a `Grant` is handing those units over. They are not on
-this key to spend, and only recovery can say where they ended up.
+On a [typed store](/docs/concepts/typed-ops) `Kind` and `Fields` are checked the way `Edit` checks
+them.
 
-Once the op that confirmed it has been folded into the snapshot, asking again answers
+`Fields` cannot carry a `Once`. The booking name already makes the op land once, and a `Once` would
+leave a name on the key for every sale.
+
+Once the op has been folded into the snapshot, asking again answers
 [`Unresolved`](/docs/concepts/reasons). The record cannot say any more whether that op took or was
 turned away. The units were still spent exactly once.
+
+Costs one datastore request and two MemoryStore request units.
 
 ### Release
 
@@ -213,33 +232,10 @@ turned away. The units were still spent exactly once.
 Store:Release(Key: KeyLike, Id: string) -> Future<boolean, Reason?>
 ```
 
-Gives back what `Id` set aside. The field returns to where it was.
+Lets go of what `Id` holds. Nothing on the key changes, since nothing was taken.
 
-Answers [`Held`](/docs/concepts/reasons) while a `Grant` is handing those units to another key. They
-are not here to give back, and the grant may already have delivered them. Recovery settles it either
-way, so leave it alone rather than calling again.
-
-### Grant
-
-```luau
-Store:Grant(Key: KeyLike, Id: string) -> Future<boolean, Reason?>
-```
-
-Hands what `Id` set aside to the key it was reserved `To`. The units are added there and the hold on
-this key is settled.
-
-Needs the reservation to name a `To`. One that doesn't answers `false`, and `Confirm` is what you
-want instead.
-
-Answers [`Held`](/docs/concepts/reasons) if the receiving key will not take the units, because it was
-erased or because the field there is no longer a number. The units stay set aside with the sender
-until recovery gives them back.
-
-Safe to call again. The receiving key remembers the name, so a second `Grant` adds nothing and
-answers `false`.
-
-A server that dies part way through leaves the units on both keys. Recovery reads the receiver before
-it gives anything back, so a reservation already handed over is settled rather than returned.
+Answers `Refused` when nothing is held under that name, and [`Unresolved`](/docs/concepts/reasons)
+when the MemoryStore could not be read to find out. Costs two MemoryStore request units.
 
 ### Bump
 
@@ -256,14 +252,23 @@ taken back out of one. Anything with a limit belongs on a single key, where `Res
 ### Total
 
 ```luau
-Store:Total(Name: string, Field: string) -> Future<number?, Reason?>
+Store:Total(Name: string, Field: string, MaxAge: number?) -> Future<number?, Reason?>
 ```
 
-Reads all 16 shards and adds them up. Costs 16 requests, so read it on a timer rather than per frame.
+Answers the sum cached in MemoryStore while that sum is under a minute old, for one request unit.
+Once it is older, one server reads all 16 shards and caches the sum again while every other server
+keeps answering the old one, so a total from another server is at most about a minute and a quarter
+behind. Your own server's bumps show in its totals at once. `MaxAge` answers this server's own last
+sum without any call while it is younger than that many seconds, so a pot drawn every five seconds
+costs nothing between its own ticks.
 
 It answers what has been added, not what the keys hold. Every shard starts at whatever your `Default`
 says the field is, and there are 16 of them, so that baseline is taken back off. A tally nobody has
 added to reads 0 whatever the `Default` is.
+
+MemoryStore has to be reachable, which in Studio means API access on. A store whose hook has no
+MemoryStore, or whose MemoryStore is down, reads the 16 shards every time and answers the same sum,
+and says so once.
 
 ### Tx
 
@@ -276,6 +281,13 @@ be stable across retries. Running the same id again answers `true` and moves not
 
 A leg's shape throws, so a bad key, a duplicate key, a `Once` on a leg. A leg's `Fields` answer
 [`Invalid`](/docs/concepts/reasons) instead, the same as `Edit`, and nothing is prepared when they do.
+
+Before it drives, a transaction leases each of its keys in MemoryStore for ten seconds. A second
+server after the same keys answers `Busy` at once, for one request unit and no datastore call,
+instead of driving into the first server's legs and learning the same `Busy` eight requests later.
+The lease only orders who tries. The marker still decides, no server waits on another, a server that
+cannot reach MemoryStore drives as before, and a lease nobody lets go of answers `Busy` for at most
+ten seconds. A two leg transaction spends 8 request units on its leases.
 
 See [Transactions](/docs/guides/transactions).
 
@@ -357,9 +369,8 @@ These writes push a key:
 
 | method | what it pushes |
 | --- | --- |
-| `Edit`, `Reserve`, `Confirm`, `Release`, `Bump`, `Reset` | the key it wrote |
+| `Edit`, `Confirm`, `Bump`, `Reset` | the key it wrote |
 | `Transfer` | both keys |
-| `Grant` | both keys |
 | `Tx` | every leg key, onto that leg's own store |
 
 Nothing else pushes. A write the reducer refuses pushes nothing, and so does a read, an `Erase` and
@@ -408,8 +419,7 @@ Store:ClearDelivered(Key: KeyLike) -> Future<boolean, Reason?>
 
 Drops delivered transfer ids older than 30 days from the key. Happens on its own.
 
-Both this and `RecoverTransfers` are about money moving between keys, so the store has to name a
-`Balance` field. Calling either on a store without one throws where you called it.
+Both this and `RecoverTransfers` work on any store, since a transfer can move any number field.
 
 ### Destroy
 

@@ -40,15 +40,16 @@ shrink it are still allowed, so a cleanup works when you're already over.
 Hitting the unsaved caps gives you [`Backlog`](/docs/concepts/reasons), and in practice that only
 happens when the datastore is down.
 
-Ledger keeps three tables of its own in the state, and they clear on different rules:
+Ledger keeps two tables of its own in the state, and they clear on different rules:
 
 | | Holds | Clears after |
 | --- | --- | --- |
 | `_Received` | names already applied | 30 days |
-| `_Held` | money set aside for a transfer | 7 days to deliver, 8 to give back |
-| `_Booked` | units set aside on the key | the reservation's hold, 15 minutes by default |
+| `_Held` | units set aside for a transfer | 7 days to deliver, 8 to give back |
 
-None of them grows with uptime. Each is bounded by how much happened inside its own window.
+A reservation is not one of them. A hold lives in MemoryStore and takes nothing off the key.
+
+Neither grows with uptime. Each is bounded by how much happened inside its own window.
 
 ## Applied names
 
@@ -68,8 +69,8 @@ fingerprint of what the name meant, which is what lets a name reused for a diffe
 sender can ask for a refund up to that point and needs the evidence to know the delivery already
 happened.
 
-A key many players write to fills at the rate all of them write to it. Every `Tx` leg, `Transfer`
-and `Grant` adds one name. One name is about 40 bytes and lasts 30 days. That is about 1,700 of
+A key many players write to fills at the rate all of them write to it. Every `Tx` leg and every
+`Transfer` adds one name. One name is about 40 bytes and lasts 30 days. That is about 1,700 of
 them a day on one key before the names alone fill the state cap.
 
 `Reserve` and `Confirm` add no name. Stock held on one key has no such ceiling.
@@ -121,12 +122,14 @@ Measured on the mock, for the path where nothing fails.
 | operation | datastore requests |
 | --- | --- |
 | `Peek`, `Edit`, `Bump` | 1 |
-| `Reserve`, `Confirm`, `Release` | 1 |
-| `Grant` | 4 |
+| `Reserve`, `Release` | 0, and two MemoryStore units, plus one read on the first hold of a key |
+| `Confirm` | 1, and two MemoryStore units |
+| `Holds` | 0, and one MemoryStore unit |
 | `Transfer` | 3 |
 | `Tx`, 2 legs | 8 |
 | `Tx`, 4 legs | 12 |
-| `Total` | 16 |
+| `Total`, cached | 0, and one MemoryStore unit |
+| `Total`, cold | 16, and three units |
 
 A transaction costs 4 requests on its marker whatever the leg count, which is why the two leg case is
 the one worth avoiding. A limit that lives on one key is a reservation, not a transaction. See
@@ -147,23 +150,17 @@ Recovery handles up to 32 holds per pass, so a key with a lot stranded takes a f
 
 ## Reservations and totals
 
-A reservation lasts 15 minutes by default, not the 30 days an applied name lasts. `Hold` sets the time
-per reservation, so a slow checkout can ask for longer without making every reservation wait.
+A hold lasts 15 minutes by default, not the 30 days an applied name lasts. `Hold` sets the time per
+reservation, up to just under 30 days. A hold lives in MemoryStore, so it costs the key nothing and
+runs out on its own. One key holds 256 at once.
 
-Two things clear the ones that ran out. The next `Reserve` on that key clears every one of them at
-once. The recovery sweep clears 32 a pass, so a key nobody reserves again takes a few minutes to drain.
+Holds share the experience's MemoryStore quota, `1000 + 120 × concurrent users` request units a
+minute, with totals, transaction leases and idle sessions. A `Reserve` or `Release` is two units, a
+`Confirm` two, a `Holds` one.
 
-That means only the reservations open right now take up room. One is about 55 bytes, so the state cap
-is about 37,000 open at the same time on one key. A 15 minute window makes that hard to reach.
-
-The hold lives on the reservation, not in the store options. Every server then folds the same log the
-same way, whatever it is configured with.
-
-The recovery sweep settles up to 32 overdue reservations a pass on one key. A key with a lot of them
-takes a few passes. Each one that names a `To` costs a read of that key, because one already handed
-over has to be settled rather than given back.
-
-A total is spread over 16 keys. `Total` reads all 16, so it costs 16 requests. `Bump` costs one.
+A total is spread over 16 keys. `Total` answers from a sum cached in MemoryStore while that sum is
+under a minute old, for one request unit, and reads all 16 keys when it is not, so a cold total costs
+16 requests on the one server that refills it. `Bump` costs one request and no units.
 
 See [Reservations and totals](/docs/guides/reservations).
 

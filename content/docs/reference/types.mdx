@@ -194,13 +194,11 @@ store and `Key` for a string keyed one.
 ```luau
 type HoldOptions = {
 	Hold: number?,
-	To: KeyLike?,
 }
 ```
 
 The options table [`Store:Reserve`](/docs/reference/store) takes last. `Hold` is how long to keep the
-units, in seconds, and defaults to 15 minutes. `To` names the key the units are going to, which is
-what `Grant` needs. See [Reservations](/docs/guides/reservations).
+units, in seconds, and defaults to 15 minutes. See [Reservations](/docs/guides/reservations).
 
 ## HistoryEntry
 

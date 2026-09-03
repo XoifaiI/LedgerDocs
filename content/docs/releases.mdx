@@ -5,6 +5,73 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 5.0.0
+
+The release that takes Ledger to 100k CCU.
+
+A hold moved off the key and into MemoryStore. A total is summed once a minute for the whole fleet
+instead of once a poll on every server. The reaper and the sweep split a pass between them rather
+than every server doing all of it. Measured at ~5,000 servers, the four workloads
+MemoryStore touches cost **1,170,705 datastore calls a minute on 4.x, and just 958 on 5.0**.
+
+| at 100k CCU, per minute | 4.x | 5.0 |
+| --- | --- | --- |
+| a pot every server draws every 5 seconds | 960,600 calls | 616 |
+| reaping every shard | 160,004 calls | 324 |
+| one key the whole fleet is repairing | 50,000 repairs | 10 |
+| 32 servers driving one key | 101 calls per success | 8 |
+
+A purchase is 3 datastore calls and 6 MemoryStore units, and it stays there from 200 servers to
+5,000.
+
+```diff
++ Holds live in MemoryStore and cost the key nothing
++ Holds answers what is held on a key
++ Total reads a sum the whole fleet shares, so a polled pot costs one MemoryStore read
++ Transfer takes a Field, so any number field moves between keys
++ Confirm takes your own op, so your reducer decides what a checkout takes
++ A transaction whose key another server is driving answers Busy at once, for one MemoryStore read
++ The reaper and the sweep do each shard and each followed key once a minute across the whole fleet
+
+- Grant, and Reserve's To
+- _Booked, and everything that read it
+- The Balance requirement on RecoverTransfers and ClearDelivered
+
+! Confirm is Confirm(Key, Id, Kind, Fields) and needs your op
+! A hold is not in the fold: Peek shows the full field, an Edit can spend held units, and that checkout is Refused
+! Reserve needs MemoryStore, which in Studio means API access on, and answers Unresolved without it
+! A hold that has gone frees its name, and Reserve no longer answers Spent
+! Total is up to two minutes old by default, one window for this server's sum and one for the item it came from. Pass MaxAge for fresher, or zero to read the shards every time
+! 5.0 does not read a reservation a 4.x server made. Drain them before you upgrade
+```
+
+### Upgrading
+
+Install the new version. The stored record does not change, and a store that never called `Reserve`
+needs nothing else.
+
+**Confirm.** Give it the kind and fields of the op that spends the units, the way you would give
+`Edit`, and have your reducer refuse one the field cannot cover. A hold no longer lowers the field, so
+a reducer that spent nothing on confirm now has to.
+
+**Grant.** Reserve without `To` and move the units with `Transfer(From, To, Amount, Id, Field)`. The
+[buying sequence](/docs/guides/reservations#the-buying-sequence) is a hold and two transfers under two
+ids now.
+
+**Studio.** Turn API access on. Without MemoryStore every `Reserve` answers `Unresolved`, and a
+checkout still works, refused by your reducer when the stock has gone.
+
+<Callout type="warn">
+  If your game called `Reserve` on 4.x, drain it before you upgrade. Stop reserving, let every open
+  reservation be confirmed or released, and let the keys compact. A 5.0 server does not apply the old
+  reservation ops, so units a 4.x reservation was still holding come back to the field, and a key
+  whose log still carries one warns that it cannot be compacted until you erase it.
+</Callout>
+
+Do not roll 5.0 out alongside 4.x servers. The two fold a reservation differently, so for the length
+of the deploy the same key reads one way on an old server and another on a new one. Take the servers
+down, or accept that anything reserved in that window is voided.
+
 ## 4.5.0
 
 ```diff
