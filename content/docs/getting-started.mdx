@@ -30,6 +30,18 @@ Ledger installs where both sides can see it, so you can keep it next to shared t
 still only runs on the server, because only the server can reach a datastore, and requiring it from a
 client says so and stops there.
 
+### If you code with an AI agent
+
+Ledger ships an agent skill. It tells the agent which call to use safely, which calls are safe to run
+on a live player's key, and what a bug that quietly duplicates money looks like in your code.
+
+```
+npx skills add XoifaiI/Ledger
+```
+
+It installs for Claude Code, Codex, Cursor, Copilot, Gemini and the rest in one go, and it carries a
+copy of these docs, so it still answers when the agent can't reach the web.
+
 ## Build a store
 
 A store is one datastore name plus the rules for everything under it. Build it once, near the top of
