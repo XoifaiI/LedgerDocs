@@ -92,8 +92,12 @@ purchase wait behind every other.
 ### Nobody has to clean up
 
 A hold lasts 15 minutes and then runs out on its own. Nothing has to give it back, because nothing
-was taken. `Hold` on the options sets a longer one, up to just under 30 days. Call `Release` when the
-player walks away, so the next buyer does not wait the 15 minutes.
+was taken. `Hold` on the options sets a shorter one. Fifteen minutes is the cap as well as the
+default, so `Hold` can only shorten a hold. A `Hold` above the cap throws where you wrote the call.
+
+A checkout that stays open longer calls `Reserve` again under the same Id. That moves the end of the
+hold out and holds nothing extra. Call `Release` when the player walks away, so the next buyer does
+not wait the 15 minutes.
 
 One key holds 256 at once. Past that `Reserve` answers [`Refused`](/docs/concepts/reasons), which in
 practice means they are being made faster than they are being confirmed or released.
@@ -126,9 +130,14 @@ them:
 
 ```luau
 Shop:Reserve("sword", "Stock", 1, OrderId):Wait()
-Bank:Transfer(Player.UserId, "shop", 250, OrderId .. ":price"):Wait()
+Bank:Transfer(tostring(Player.UserId), "shop", 250, OrderId .. ":price"):Wait()
 Shop:Transfer("sword", tostring(Player.UserId), 1, OrderId .. ":unit", "Stock"):Wait()
 ```
+
+`Bank` is a store with `Keys = "String"`, and the player's key on it is `tostring(Player.UserId)`.
+A transfer moves a field between two keys of one store, so both keys have to suit that store's key
+mode. A player keyed store cannot hold a key called `"shop"`, and a string keyed store cannot take a
+`UserId` as a number. Ledger throws at the call when a key does not suit the store.
 
 Both transfers are idempotent under their ids, so running the whole thing again after a crash lands
 each exactly once. A transfer under a name that already moved answers finished. The hold runs out on

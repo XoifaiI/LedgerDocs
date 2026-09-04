@@ -174,8 +174,10 @@ while a key already holds 256 at once, which means they are being made faster th
 confirmed or released. The stock a hold is judged against is what the key read last, and a refusal
 reads the key again before it answers, so a restock is seen.
 
-`Hold` is how long to keep it, in seconds, up to just under 30 days, and defaults to 15 minutes. A
-hold nobody takes runs out on its own. Nothing gives it back, since nothing was taken.
+`Hold` is how long to keep it, in seconds. The cap and the default are both 15 minutes, so `Hold`
+can only shorten a hold. A `Hold` above the cap throws where you wrote the call. Reserve again under
+the same Id to move the end of a hold out. A hold nobody takes runs out on its own. Nothing gives it
+back, since nothing was taken.
 
 A hold is not in the fold. An `Edit` can spend units another player holds, and that player's
 `Confirm` is then `Refused`. Nothing is oversold, one checkout fails.

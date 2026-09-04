@@ -83,13 +83,17 @@ all throw on a string keyed store, because there's no player to hang a session o
 A key is a string of 1 to 50 characters and it has to be valid UTF-8. Roblox sets that limit, so
 Ledger can't raise it.
 
+A key cannot hold a `#`. Ledger puts a `#` between a tally name and its shard number, so a key that
+holds one could read as a shard of something else. `Ledger` throws where you wrote the call when a
+key holds one.
+
 Pick keys that come from something stable. A clan id, a listing id, a slug. Don't build them out of
 anything that might change, because there's no rename.
 
 ## How much one key holds
 
 A clan or a listing takes writes from every player at once. Ledger writes down the name of every
-`Tx` leg, `Transfer` and `Grant` that goes through. It keeps each name for 30 days. That is about
+`Tx` leg and every `Transfer` that goes through. It keeps each name for 30 days. That is about
 1,700 a day on one key before those names fill the state cap.
 
 `Edit` writes no name. A clan that only takes `Edit` has nothing to plan around. `Reserve` and

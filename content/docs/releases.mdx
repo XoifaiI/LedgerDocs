@@ -41,6 +41,7 @@ A purchase is 3 datastore calls and 6 MemoryStore units, and it stays there from
 ! A hold is not in the fold: Peek shows the full field, an Edit can spend held units, and that checkout is Refused
 ! Reserve needs MemoryStore, which in Studio means API access on, and answers Unresolved without it
 ! A hold that has gone frees its name, and Reserve no longer answers Spent
+! A hold is capped at 15 minutes, so Hold only shortens one and a longer Hold throws. Reserve again under the same Id to keep a checkout open
 ! Total is up to two minutes old by default, one window for this server's sum and one for the item it came from. Pass MaxAge for fresher, or zero to read the shards every time
 ! 5.0 does not read a reservation a 4.x server made. Drain them before you upgrade
 ```

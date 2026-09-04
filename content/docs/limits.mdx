@@ -150,9 +150,10 @@ Recovery handles up to 32 holds per pass, so a key with a lot stranded takes a f
 
 ## Reservations and totals
 
-A hold lasts 15 minutes by default, not the 30 days an applied name lasts. `Hold` sets the time per
-reservation, up to just under 30 days. A hold lives in MemoryStore, so it costs the key nothing and
-runs out on its own. One key holds 256 at once.
+A hold lasts 15 minutes, not the 30 days an applied name lasts. Fifteen minutes is the cap as well
+as the default. `Hold` sets a shorter time per reservation, and `Reserve` throws above the cap. A
+checkout that stays open longer calls `Reserve` again under the same Id. A hold lives in MemoryStore,
+so it costs the key nothing and runs out on its own. One key holds 256 at once.
 
 Holds share the experience's MemoryStore quota, `1000 + 120 × concurrent users` request units a
 minute, with totals, transaction leases and idle sessions. A `Reserve` or `Release` is two units, a
