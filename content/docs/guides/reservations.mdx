@@ -59,9 +59,10 @@ fold, so an `Edit` can spend units somebody holds and their `Confirm` is then `R
 was lost, or never made because the MemoryStore was down, costs the same: one refused checkout and
 never an oversell. Show players `Holds` rather than the field when "3 left" has to mean it.
 
-Asking to reserve under a name that already holds something answers `true` and holds nothing extra,
-so a retry is safe. Confirming twice spends once, since the op's id comes from the name. Once a hold
-has gone, the same name can be used again.
+Asking to reserve under a name that already holds the same thing answers `true` and holds nothing
+extra, so a retry is safe. Under a different amount or field it answers `Spent`. Confirming twice
+spends once, since the op's id comes from the name. Once a hold has gone, a new hold can be taken
+under the same name, but a confirm under it never spends twice. Give each purchase its own Id.
 
 ### One key is one item
 

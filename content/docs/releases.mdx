@@ -5,6 +5,27 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 5.0.1
+
+```diff
++ A confirm under a name an earlier confirm already spent answers Spent
++ Reserve under a held name for another amount or field answers Spent
+
+- A key that filled up while a transaction was parked on it staying full after the transaction settled
+- An older server's compaction dropping a bump or a transfer on a field only a newer Default defines
+- Minor log improvements
+
+! A booking Id is for one purchase. Reserving under it again once the hold has gone still works, and a confirm under it then answers Spent
+! Confirm reads the hold first, so a purchase is 3 datastore calls and 7 MemoryStore units
+! A commit replayed after its op was folded into the snapshot answers Unresolved, the same as Edit
+```
+
+### Upgrading
+
+Install the new version. The stored record does not change, and your code does not change unless
+it reuses a booking Id from one purchase to the next. Give each purchase its own Id, the order id
+is the usual one.
+
 ## 5.0.0
 
 The release that takes Ledger to 100k CCU.
