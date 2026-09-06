@@ -75,14 +75,26 @@ Player only. The state table, or `nil`. Shorthand for `Get` then `Get()`.
 ### Peek
 
 ```luau
-Store:Peek(Key: KeyLike) -> Future<D?, Reason?>
+Store:Peek(Key: KeyLike, MaxAge: number?) -> Future<D?, Reason?>
 ```
 
-Reads the record and folds it. Works on anyone, online here, elsewhere, or offline. No cache, so it
-costs a request every time.
+Reads the record and folds it. It works for any key, with the player here, on another server, or
+offline. Without `MaxAge` there is no cache. Each call costs one request.
 
-A key nobody has written folds to your `Default`, so `nil` always means the read failed and the
-reason says why. `Behind` means a newer server wrote it, anything else is worth another go.
+`MaxAge` answers a copy instead. This server keeps a copy of the key. While that copy is younger
+than `MaxAge` seconds, `Peek` answers it with no call. After that, `Peek` reads the shared copy in
+MemoryStore for one request unit. The whole fleet reads that one shared copy. After 60 to 75 seconds
+the shared copy is stale. One server then reads the record and writes the shared copy again. The
+other servers answer the old copy until then. Each server has its own limit between 60 and
+75 seconds. One server refills the copy, not all of them.
+
+A `MaxAge` of 0 reads the record now, through the same claim. When the whole fleet is told to
+refresh at the same time, only one server reads the record. The copy carries your fields only.
+`_Received` and `_Held` are not on it. `Peek` with a `MaxAge` works on string keyed stores only. See
+[Following a key](/docs/guides/entity-stores#following-a-key).
+
+A key nobody has written folds to your `Default`. `nil` always means the read failed, and the reason
+says why. `Behind` means a newer server wrote the key. Try again on any other reason.
 
 ### DidApply
 
@@ -257,20 +269,22 @@ taken back out of one. Anything with a limit belongs on a single key, where `Res
 Store:Total(Name: string, Field: string, MaxAge: number?) -> Future<number?, Reason?>
 ```
 
-Answers the sum cached in MemoryStore while that sum is under a minute old, for one request unit.
-Once it is older, one server reads all 16 shards and caches the sum again while every other server
-keeps answering the old one, so a total from another server is at most about a minute and a quarter
-behind. Your own server's bumps show in its totals at once. `MaxAge` answers this server's own last
-sum without any call while it is younger than that many seconds, so a pot drawn every five seconds
-costs nothing between its own ticks.
+Answers the sum cached in MemoryStore, for one request unit. After 60 to 75 seconds that sum is
+stale. One server then reads all 16 shards and caches the sum again. The other servers answer the
+old sum until then. A total from another server is at most 90 seconds behind, plus the time one
+refill takes. Each server has its own limit between 60 and 75 seconds. One server refills the sum,
+not all of them. Your own server's bumps show in its totals immediately.
 
-It answers what has been added, not what the keys hold. Every shard starts at whatever your `Default`
-says the field is, and there are 16 of them, so that baseline is taken back off. A tally nobody has
-added to reads 0 whatever the `Default` is.
+`MaxAge` answers this server's own last sum with no call while that sum is younger than `MaxAge`
+seconds. A pot drawn every five seconds costs nothing between its own refills.
 
-MemoryStore has to be reachable, which in Studio means API access on. A store whose hook has no
-MemoryStore, or whose MemoryStore is down, reads the 16 shards every time and answers the same sum,
-and says so once.
+It answers what has been added, not what the keys hold. Each of the 16 shards starts at the value
+your `Default` gives the field. That baseline is taken off the sum. A tally nobody has added to
+reads 0 for any `Default`.
+
+MemoryStore has to be reachable. In Studio that means API access on. A store whose hook has no
+MemoryStore, or whose MemoryStore is down, reads the 16 shards each time and answers the same sum.
+It says so once.
 
 ### Tx
 
@@ -389,6 +403,34 @@ Listeners on this stream run on their own thread and may yield, which the ones o
 
 Use it to flush a session the moment another part of your game writes to its key. See
 [Transactions](/docs/guides/transactions#a-live-session-does-not-know-a-leg-wrote-to-it).
+
+### Follow
+
+```luau
+Store:Follow(Key: KeyLike) -> Observer<D>
+```
+
+A stream of the state on one key. Ledger keeps it fresh from the shared copy. Subscribe once. Ledger
+reads the shared copy on a timer. The timer runs every 30 seconds while the key changes. It slows to
+every 4 minutes while the key does not change. Ledger pushes the state only when it changed. The
+first tick pushes the state as it is. A subscribe pushes nothing. Call `Peek` with a `MaxAge` for
+the value now.
+
+```luau
+Settings:Follow("config"):Subscribe(function(Config)
+	Apply(Config)
+end)
+```
+
+The timer starts with the first listener. It stops when the last listener disconnects. `Destroy`
+stops it too. A write on this server shows on this server's stream immediately. A write on another
+server shows after the shared copy is refilled and this server ticks. That takes at most 75 seconds
+plus one tick. It is faster when that server tells this one to refresh. Ledger hands back one stream
+per key. `Follow` works on string keyed stores only. See
+[Following a key](/docs/guides/entity-stores#following-a-key).
+
+Listeners run inline and must not yield, the same as `Session:Observe()`. See
+[Observer](/docs/reference/observer#listeners-run-inline).
 
 ## Maintenance
 

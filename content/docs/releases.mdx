@@ -5,6 +5,31 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 5.1.0
+
+A key that every server needs is read once for the whole fleet. The measure was 5,000 servers
+that read one 4 KB settings key every 30 seconds. Without the shared copy that was 100,000
+datastore reads in ten minutes. That is 40 MB a minute on one key, against a lane of 25 MB. With
+the shared copy it was 4 reads, at one MemoryStore unit per server per minute.
+
+```diff
++ Store:Follow(Key) streams the state on one key, kept fresh from one shared copy
++ Peek takes a MaxAge and answers a copy, this server's own first and the shared one next
++ A Peek with a MaxAge of 0 reads the record through a claim. A fleet told to refresh reads it once
++ A copy that a newer build folded answers Behind on an older build, the same as its record
++ A total is a copy like a followed key. A fleet's first look at a cold pot reads the shards once
++ Each server has its own stale limit between 60 and 75 seconds. One server refills a copy, not all of them
+
+! Follow and Peek with a MaxAge work on string keyed stores only. The copy carries your fields only, never _Received or _Held
+! A cold total costs five MemoryStore units. The two more are so the fleet can read it once
+! A followed state has to fit one MemoryStore item, 32 KB. A bigger key is read from the record
+! A copy shares the MemoryStore quota with holds, totals and leases, at one unit a tick per server
+```
+
+### Upgrading
+
+Install the new version.
+
 ## 5.0.1
 
 ```diff

@@ -122,6 +122,8 @@ Measured on the mock, for the path where nothing fails.
 | operation | datastore requests |
 | --- | --- |
 | `Peek`, `Edit`, `Bump` | 1 |
+| `Peek` with a `MaxAge`, from the copy | 0, and one MemoryStore unit |
+| `Peek` with a `MaxAge`, refilling the copy | 1, and five units, on one server a minute |
 | `Reserve`, `Release` | 0, and two MemoryStore units, plus one read on the first hold of a key |
 | `Confirm` | 1, and two MemoryStore units |
 | `Holds` | 0, and one MemoryStore unit |
@@ -129,7 +131,7 @@ Measured on the mock, for the path where nothing fails.
 | `Tx`, 2 legs | 8 |
 | `Tx`, 4 legs | 12 |
 | `Total`, cached | 0, and one MemoryStore unit |
-| `Total`, cold | 16, and three units |
+| `Total`, cold | 16, and five units, on one server a minute |
 
 A transaction costs 4 requests on its marker whatever the leg count, which is why the two leg case is
 the one worth avoiding. A limit that lives on one key is a reservation, not a transaction. See
@@ -156,12 +158,16 @@ checkout that stays open longer calls `Reserve` again under the same Id. A hold 
 so it costs the key nothing and runs out on its own. One key holds 256 at once.
 
 Holds share the experience's MemoryStore quota, `1000 + 120 × concurrent users` request units a
-minute, with totals, transaction leases and idle sessions. A `Reserve` or `Release` is two units, a
-`Confirm` two, a `Holds` one.
+minute, with totals, transaction leases and followed keys. A `Reserve` or `Release` is two units. A
+`Confirm` is two. A `Holds` is one. A followed key is one unit a tick on each server that follows
+it. The one server that refills the shared copy spends five units and one request each minute. The
+copy has to fit one MemoryStore item, 32 KB of your fields. A bigger key is read from the record by
+every server. Ledger says so once a window.
 
-A total is spread over 16 keys. `Total` answers from a sum cached in MemoryStore while that sum is
-under a minute old, for one request unit, and reads all 16 keys when it is not, so a cold total costs
-16 requests on the one server that refills it. `Bump` costs one request and no units.
+A total is spread over 16 keys. `Total` answers a sum cached in MemoryStore for one request unit.
+After 60 to 75 seconds that sum is stale. One server then reads all 16 keys and caches the sum
+again. A cold total costs that server 16 requests. Each server has its own limit between 60 and
+75 seconds. One server refills the sum, not all of them. `Bump` costs one request and no units.
 
 See [Reservations and totals](/docs/guides/reservations).
 

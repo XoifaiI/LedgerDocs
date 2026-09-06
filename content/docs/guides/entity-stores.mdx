@@ -102,13 +102,42 @@ A clan or a listing takes writes from every player at once. Ledger writes down t
 Above that rate, give the entity more than one key. One key per guild rather than one for all of
 them. See [Limits](/docs/limits#applied-names).
 
-## Caching
+## Following a key
 
-`Peek` reads the record every time you call it. There's no cache, because with twenty servers
-writing to the key a cached copy would be out of date almost immediately. It does mean you shouldn't
-call it in a loop or per frame.
+`Peek` with no `MaxAge` reads the record on each call. Do not call it in a loop or every frame.
+Follow a key that every server needs, such as a settings table, a role list or a feature switch:
 
-Read it once, hold onto it, and read again after you write.
+```luau
+Settings:Follow("config"):Subscribe(function(Config)
+	Apply(Config)
+end)
+```
+
+One shared copy of the key is in MemoryStore for the whole fleet. Each server reads the shared copy
+on a timer. It pushes the state only when the state changed. After 60 to 75 seconds the shared copy
+is stale. One server then reads the record and writes the shared copy again. The other servers
+answer the old copy until then. A change on any server reaches every server in at most 75 seconds
+plus one tick. A fleet of 5,000 servers costs the key one datastore read a minute, not 5,000.
+`Peek(Key, MaxAge)` reads the same copy without a subscription.
+
+Follow a key at server start. Do not peek it there. A follow's first read is spread over its first
+tick. A peek in a server's first second is not spread. With a follow, 5,000 servers that start
+together do not reach one copy in the same second.
+
+A followed key holds small state that changes slowly. The copy has to fit one MemoryStore item,
+32 KB. The copy carries your fields only. Keep anything that grows with players in one key per
+entry. Let the followed key point at those keys. A ban is one key per banned player. A log is one
+key per line. Do not follow those keys.
+
+To show a write on every server immediately, send the key over `MessagingService` from `Store:Stale()`.
+The receiver calls `Peek(Key, 0)`. That reads the record on one server and refills the shared copy
+for the others. Wait a random time of a few seconds before that call. Then the fleet does not reach
+one copy in the same instant, and one refill serves all of it. See
+[Telling another server to refresh](/docs/guides/transactions#telling-another-server-to-refresh).
+
+A store with no MemoryStore reads the record on each tick. When MemoryStore stops answering, each
+server keeps its copy for 10 minutes. A server with no copy reads the record once in those
+10 minutes. No server waits for another server at any point.
 
 ## Naming their ops
 

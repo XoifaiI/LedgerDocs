@@ -12,8 +12,9 @@ end)
 An observer is a stream of values you can subscribe to. Ledger pushes the new state onto one every
 time a change goes through, and it hands you that same stream from `Session:Observe()`.
 
-`Store:Stale()` is the other stream Ledger gives you. It carries the keys this server has changed
-rather than a state table. Everything on this page works on both.
+`Store:Stale()` is the second stream Ledger gives you. It carries the keys this server changed, not
+a state table. `Store:Follow()` is the third stream. It carries the state on one key that every
+server reads. Everything on this page works on all three.
 
 ## Subscribe
 
