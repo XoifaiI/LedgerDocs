@@ -231,12 +231,16 @@ whose hold ran out, or was never made because the MemoryStore was down, still se
 On a [typed store](/docs/concepts/typed-ops) `Kind` and `Fields` are checked the way `Edit` checks
 them.
 
-`Fields` cannot carry a `Once`. The booking name already makes the op land once, and a `Once` would
-leave a name on the key for every sale.
+The key remembers the op while it is in the log, and for the next 2048 ops it absorbs. A confirm
+replayed inside that window spends nothing more. Once the op is in the snapshot, the reply is
+[`Unresolved`](/docs/concepts/reasons). The record cannot say whether that op took or was turned
+away. Once the key has forgotten the op, a replay sells the units again.
 
-Once the op has been folded into the snapshot, asking again answers
-[`Unresolved`](/docs/concepts/reasons). The record cannot say any more whether that op took or was
-turned away. The units were still spent exactly once.
+`Fields` can carry a [`Once`](/docs/concepts/once). A named confirm replayed after the key has
+forgotten its op answers `Refused`, and `DidApply` answers `true` for 30 days. A name costs the key
+40 bytes for 30 days. A key that sells 1,700 units a day fills its state with names in a month. Give
+a confirm a name only when it may be retried later than the key remembers it. Put the name for the
+grant on the player's key.
 
 Costs one datastore request and two MemoryStore request units.
 

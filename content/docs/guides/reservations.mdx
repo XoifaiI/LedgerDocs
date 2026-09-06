@@ -61,8 +61,11 @@ never an oversell. Show players `Holds` rather than the field when "3 left" has 
 
 Asking to reserve under a name that already holds the same thing answers `true` and holds nothing
 extra, so a retry is safe. Under a different amount or field it answers `Spent`. Confirming twice
-spends once, since the op's id comes from the name. Once a hold has gone, a new hold can be taken
-under the same name, but a confirm under it never spends twice. Give each purchase its own Id.
+spends once while the key remembers the op. The key remembers an op while it is in the log, and for
+the next 2048 ops it absorbs. Once a hold has gone, a new hold can be taken under the same name. A
+confirm under it does not sell again while the key remembers the first confirm. Give each purchase
+its own Id. A confirm that may be retried later than the key remembers it needs a
+[`Once`](/docs/concepts/once), see [Confirm](/docs/reference/store#confirm).
 
 ### One key is one item
 

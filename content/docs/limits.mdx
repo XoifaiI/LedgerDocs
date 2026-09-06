@@ -73,7 +73,8 @@ A key many players write to fills at the rate all of them write to it. Every `Tx
 `Transfer` adds one name. One name is about 40 bytes and lasts 30 days. That is about 1,700 of
 them a day on one key before the names alone fill the state cap.
 
-`Reserve` and `Confirm` add no name. Stock held on one key has no such ceiling.
+`Reserve` adds no name. `Confirm` adds one only when you give it a [`Once`](/docs/concepts/once).
+Stock sold without one has no such ceiling.
 
 A key that reaches the cap stays there. `ClearDelivered` has nothing older than 30 days to drop. Spread the entity over several keys before that point, the same way `Bump` spreads
 a total. See [Entity stores](/docs/guides/entity-stores).

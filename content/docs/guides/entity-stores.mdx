@@ -96,8 +96,8 @@ A clan or a listing takes writes from every player at once. Ledger writes down t
 `Tx` leg and every `Transfer` that goes through. It keeps each name for 30 days. That is about
 1,700 a day on one key before those names fill the state cap.
 
-`Edit` writes no name. A clan that only takes `Edit` has nothing to plan around. `Reserve` and
-`Confirm` write none either.
+`Edit` writes no name. A clan that only takes `Edit` has nothing to plan around. `Reserve` writes
+none. `Confirm` writes one only when you give it a [`Once`](/docs/concepts/once).
 
 Above that rate, give the entity more than one key. One key per guild rather than one for all of
 them. See [Limits](/docs/limits#applied-names).

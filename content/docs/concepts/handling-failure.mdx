@@ -33,9 +33,11 @@ A key nobody has ever written folds to your `Default`, so a read never gives you
 
 ## Why a retry is safe
 
-Every op carries an id, and an id applies at most once on a key. A retry that already went through
-answers `true` and moves nothing the second time. That holds for
-[`Once`](/docs/concepts/once) names, transfer ids and transaction ids.
+Every op carries an id, and an id applies at most once while the key remembers it. A key remembers
+an op while it is in the log, and for the next 2048 ops it absorbs. A retry that already went
+through answers `true` and moves nothing the second time. A [`Once`](/docs/concepts/once) name, a
+transfer id and a transaction id are remembered for 30 days instead. Use one of those for anything
+that may be retried later than the key remembers it.
 
 The id has to be the same one. Build it before the call and keep it for the retry:
 

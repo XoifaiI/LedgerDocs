@@ -44,8 +44,10 @@ A log that only ever grows would eventually hit the 4 MB value limit. Once a log
 Ledger folds it down into a fresh snapshot and drops the ops it just absorbed. Autosave does this on
 its own, and `Session:Compact()` forces it.
 
-Your reducer never sees any of that. Compaction must not lose the op ids it has already applied, or a
-retry afterwards would apply twice. Ledger keeps them inside the state itself, under `_Received`.
+Your reducer never sees any of that. Compaction keeps the ids of the ops it absorbed on the record,
+under `Seen`. A retry that arrives afterwards applies nothing. `Seen` keeps the newest 2048. A
+[`Once`](/docs/concepts/once) name, a transfer id and a transaction id live inside the state, under
+`_Received`, for 30 days.
 
 ## Reserved fields
 

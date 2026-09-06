@@ -5,6 +5,17 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 5.1.1
+
+```diff
+- Removed an old assert
+- A reap pass that listed all 32 shards at once and ran a small server out of list budget. The sweep sizes a reap pass from the list budget now, one shard on a small server
+```
+
+### Upgrading
+
+Install the new version.
+
 ## 5.1.0
 
 A key that every server needs is read once for the whole fleet. The measure was 5,000 servers
