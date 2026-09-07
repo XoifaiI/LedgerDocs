@@ -81,7 +81,7 @@ across a retry:
 
 ```luau
 local Ok, Why = Session:CommitOp({
-	Id = HttpService:GenerateGUID(false),
+	Id = Ledger.Id(),
 	Kind = "GrantReward",
 	Item = "Sword",
 	Once = `order:{OrderId}`,

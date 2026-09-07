@@ -122,7 +122,8 @@ Measured on the mock, for the path where nothing fails.
 
 | operation | datastore requests |
 | --- | --- |
-| `Peek`, `Edit`, `Bump` | 1 |
+| `Peek`, `Edit`, `EditOp`, `Bump` | 1 |
+| `Bump`, with `BumpEvery` | 0, and one per tally per window |
 | `Peek` with a `MaxAge`, from the copy | 0, and one MemoryStore unit |
 | `Peek` with a `MaxAge`, refilling the copy | 1, and five units, on one server a minute |
 | `Reserve`, `Release` | 0, and two MemoryStore units, plus one read on the first hold of a key |
@@ -165,10 +166,12 @@ it. The one server that refills the shared copy spends five units and one reques
 copy has to fit one MemoryStore item, 32 KB of your fields. A bigger key is read from the record by
 every server. Ledger says so once a window.
 
-A total is spread over 16 keys. `Total` answers a sum cached in MemoryStore for one request unit.
-After 60 to 75 seconds that sum is stale. One server then reads all 16 keys and caches the sum
-again. A cold total costs that server 16 requests. Each server has its own limit between 60 and
-75 seconds. One server refills the sum, not all of them. `Bump` costs one request and no units.
+A total is spread over 16 keys, or the `Shards` the store names, 1 to 99. `Total` answers a sum
+cached in MemoryStore for one request unit. After 60 to 75 seconds that sum is stale. One server
+then reads every key and caches the sum again. A cold total costs that server one request per
+shard. Each server has its own limit between 60 and 75 seconds. One server refills the sum, not
+all of them. `Bump` costs one request and no units. With `BumpEvery` a server pays one request per
+tally per window, however many times it bumps.
 
 See [Reservations and totals](/docs/guides/reservations).
 

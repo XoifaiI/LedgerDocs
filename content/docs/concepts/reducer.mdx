@@ -104,9 +104,23 @@ Return `nil` for anything you don't recognise. Ledger treats that as a refusal, 
 rolling deploy safe. An old server that's never heard of `NewFeatureOp` refuses it instead of
 guessing at it.
 
+Ledger checks this when the store is built. It hands the reducer a kind nothing knows. A reducer
+that returns a state for it gets a warning at `New`. Every unknown op on that store counts as
+applied until the reducer is fixed.
+
 That's a kind you don't know yet. A kind you've deleted is the other way round, because nothing is
 ever going to accept it, and refusing one of those stops the key compacting for good. See [changing
 the reducer](/docs/guides/migrations#changing-the-reducer).
+
+## What Studio checks at every save
+
+In Studio, Ledger checks the folded state of a session at every save. State a datastore cannot
+hold gets a warning that names the field. An array with a gap, a table that mixes array and string
+keys, and a `nan` are the usual causes. A table keyed by `UserId` is an array with gaps. Key it by
+`tostring(UserId)` instead.
+
+Live servers skip the check. A key in that state keeps taking writes and stops compacting, and the
+compaction says so.
 
 ## Check the fields
 

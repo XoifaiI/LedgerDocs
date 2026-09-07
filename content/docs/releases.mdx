@@ -5,6 +5,27 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 5.2.0
+
+```diff
++ Store:EditOp(Key, Op) appends an op with your own id. Sent again, it lands one time
++ Ledger.Id() API to use the same method Ledger uses to generate ids
++ Shards on the config sets how many keys a total is spread over, 1 to 99
++ BumpEvery on the config queues bumps and writes one op per tally per window
++ A reducer that returns a state for a kind it does not know gets a warning when the store is built
++ In Studio, state a datastore cannot hold gets a warning at the next save, with the field named
+
+- An edit whose reducer threw answering Refused with no word of the throw
+
+! Reserve answers Busy, not Refused, when a key already holds 256. Ask again, a hold runs out in 15 minutes or less
+! With BumpEvery a Bump's Future answers once its window is written. Wait on it for a durable answer, the way Commit is. Do not wait and a crash can lose the window
+```
+
+### Upgrading
+
+Install the new version. A game that reads `Refused` from `Reserve` as sold out has to read `Busy`
+as try again.
+
 ## 5.1.1
 
 ```diff

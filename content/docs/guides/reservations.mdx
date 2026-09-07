@@ -103,8 +103,9 @@ A checkout that stays open longer calls `Reserve` again under the same Id. That 
 hold out and holds nothing extra. Call `Release` when the player walks away, so the next buyer does
 not wait the 15 minutes.
 
-One key holds 256 at once. Past that `Reserve` answers [`Refused`](/docs/concepts/reasons), which in
-practice means they are being made faster than they are being confirmed or released.
+One key holds 256 at once. Past that `Reserve` answers [`Busy`](/docs/concepts/reasons).
+Holds are being made faster than they are confirmed or released. A hold runs out in 15
+minutes or less. Ask again shortly. `Refused` means the stock cannot cover the units.
 
 The stock a hold is judged against is what the key read last. A refusal reads the key again before
 it answers, so a restock is seen. `Reserve` needs MemoryStore, which in Studio means API access on.
@@ -162,7 +163,8 @@ A total is the other shape. Nothing is limited, a lot of servers add to it, and 
 
 One key can only be written by one server at a time, so a key that every server writes spends its
 time retrying. `Bump` spreads the total over 16 keys and gives each server its own, so they stop
-queueing behind each other.
+queueing behind each other. `Shards` on the config sets the count, 1 to 99. Raise it for a large
+fleet. Never lower it on a live store. The bumps on the top shards then leave every total.
 
 ```luau
 local Events = Ledger.New({
@@ -177,7 +179,13 @@ Events:Bump("summerpot", "Gold", 25):Wait()
 local Pot = Events:Total("summerpot", "Gold"):Wait()
 ```
 
-`Total` reads all 16 shards, so it costs 16 requests. Read it on a timer and cache it.
+`Total` answers a sum cached in MemoryStore for one request unit. One server a minute reads every
+shard and refills it. Read it on a timer.
+
+A game that bumps on every action sets `BumpEvery` on the store, in seconds up to 60. The server
+then queues its bumps and writes one op per tally per window. `Bump` answers a Future that
+completes when the window is written. Wait on it the way you wait on `Commit`, or do not and it is
+hopeful like `Apply`. A server that crashes loses the bumps of its last window.
 
 `Total` answers what has been added, not what the 16 keys hold. `Bump` keeps its own running count on
 each shard and never touches the field your reducer owns, so the `Default` never counts toward the

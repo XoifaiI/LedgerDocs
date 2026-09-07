@@ -143,6 +143,33 @@ affect answers straight away.
 On a store built with [`NewTyped`](/docs/concepts/typed-ops) the `Kind` is held against the kinds you
 named and the `Fields` against what that kind carries.
 
+### EditOp
+
+```luau
+Store:EditOp(Key: KeyLike, Op: Op) -> Future<boolean, Reason?>
+```
+
+Appends an op you built yourself, with your own `Id`. The same op sent again lands one time. Use it
+to retry an edit that answered `Unresolved`. `Edit` creates a new id on every call. A retried `Edit`
+can apply twice.
+
+Create the id with [`Ledger.Id`](/docs/reference/ledger#ledgerid) and keep it for the retry. An op
+needs a string `Id` and a string `Kind`. `Invalid` is the answer when either is missing, or when a
+field cannot be stored. Ledger copies the op. The table you pass is never changed.
+
+```luau
+local Op = { Id = Ledger.Id(), Kind = "Archive", Line = Line }
+local Ok, Why = Store:EditOp("journal", Op):Wait()
+if not Ok and Why == Ledger.Reason.Unresolved then
+	Ok, Why = Store:EditOp("journal", Op):Wait()
+end
+```
+
+A retry after the key has compacted answers `Unresolved`. The op is in the snapshot by then, and
+the record cannot say whether that id took.
+
+On a store built with `NewTyped` the op is held against the kinds you named.
+
 ### Transfer
 
 ```luau
@@ -181,10 +208,10 @@ field of your state stops the build rather than throwing at the call. `Bump`, `T
 Asking again under a name already held answers `true` and holds nothing extra. Once a hold has gone,
 confirmed, released or run out, the same name can be used again.
 
-Asking for more than the field has, counting what is already held, answers `Refused`. So does asking
-while a key already holds 256 at once, which means they are being made faster than they are being
-confirmed or released. The stock a hold is judged against is what the key read last, and a refusal
-reads the key again before it answers, so a restock is seen.
+Asking for more than the field has, counting what is already held, answers `Refused`. Asking while
+a key already holds 256 answers `Busy`. A hold runs out in 15 minutes or less. Ask again shortly.
+The stock a hold is judged against is what the key read last, and a refusal reads the key again
+before it answers, so a restock is seen.
 
 `Hold` is how long to keep it, in seconds. The cap and the default are both 15 minutes, so `Hold`
 can only shorten a hold. A `Hold` above the cap throws where you wrote the call. Reserve again under
@@ -263,9 +290,18 @@ Store:Bump(Name: string, Field: string, Amount: number) -> Future<boolean, Reaso
 
 String keyed stores only. Adds `Amount` to a total spread over 16 keys, named `<Name>#0` to
 `<Name>#15`. Each server writes its own shard, so servers do not queue behind each other on one key.
+`Shards` on the config sets the count, 1 to 99. Only ever raise it on a live store. A lower count
+stops reading the top shards, and their bumps leave every total.
 
 `Amount` has to be positive. A total is spread over keys that cannot see each other, so nothing can be
 taken back out of one. Anything with a limit belongs on a single key, where `Reserve` can hold it.
+
+A store built with `BumpEvery` queues its bumps. Every `BumpEvery` seconds the server writes one
+op per tally with the sum of its queued bumps. `Bump` then answers one Future shared by every bump
+of that tally in the window. Wait on it and it answers once the window is written, the way `Commit`
+does. Do not wait and the bump is hopeful, the way `Apply` is. `Destroy` and `CloseAll` write what
+is queued. A server that crashes loses the bumps of its last window. Your own server's totals show
+a queued bump immediately.
 
 ### Total
 
@@ -274,7 +310,7 @@ Store:Total(Name: string, Field: string, MaxAge: number?) -> Future<number?, Rea
 ```
 
 Answers the sum cached in MemoryStore, for one request unit. After 60 to 75 seconds that sum is
-stale. One server then reads all 16 shards and caches the sum again. The other servers answer the
+stale. One server then reads every shard and caches the sum again. The other servers answer the
 old sum until then. A total from another server is at most 90 seconds behind, plus the time one
 refill takes. Each server has its own limit between 60 and 75 seconds. One server refills the sum,
 not all of them. Your own server's bumps show in its totals immediately.
@@ -282,12 +318,12 @@ not all of them. Your own server's bumps show in its totals immediately.
 `MaxAge` answers this server's own last sum with no call while that sum is younger than `MaxAge`
 seconds. A pot drawn every five seconds costs nothing between its own refills.
 
-It answers what has been added, not what the keys hold. Each of the 16 shards starts at the value
+It answers what has been added, not what the keys hold. Each shard starts at the value
 your `Default` gives the field. That baseline is taken off the sum. A tally nobody has added to
 reads 0 for any `Default`.
 
 MemoryStore has to be reachable. In Studio that means API access on. A store whose hook has no
-MemoryStore, or whose MemoryStore is down, reads the 16 shards each time and answers the same sum.
+MemoryStore, or whose MemoryStore is down, reads every shard each time and answers the same sum.
 It says so once.
 
 ### Tx

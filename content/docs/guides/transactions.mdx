@@ -62,7 +62,7 @@ one until you return `PurchaseGranted`, so it survives a server restart as well 
 ```luau
 local function OpenTrade(A: Player, B: Player)
 	return {
-		Id = HttpService:GenerateGUID(false),   -- once, here
+		Id = Ledger.Id(),   -- once, here
 		A = A,
 		B = B
 	}
@@ -72,8 +72,8 @@ end
 Store:Tx(`trade:{Trade.Id}`, Legs):Wait()
 ```
 
-A GUID is fine there because it's minted once and held. What breaks is generating one inside the `Tx`
-call, since every retry would be a new transaction and apply the money again.
+`Ledger.Id` is fine there because it's minted once and held. What breaks is generating one inside
+the `Tx` call, since every retry would be a new transaction and apply the money again.
 
 **Anything from outside**, a webhook or your own website, should use the sender's order id. They're
 the ones who retry, so their id is the one that stays the same when they do.

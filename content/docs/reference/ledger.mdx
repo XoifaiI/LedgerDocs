@@ -24,6 +24,8 @@ misbehave later.
 | `Balance` | `string?` | Names a number field for [transfers](/docs/guides/transfers). |
 | `Migrations` | `{ Migration }?` | See [Migrations](/docs/guides/migrations). |
 | `Keys` | `"Player" \| "String"` | Defaults to `"Player"`. |
+| `Shards` | `number?` | How many keys a total is spread over, 1 to 99. Defaults to 16. Only ever raise it. See [Bump](/docs/reference/store#bump). |
+| `BumpEvery` | `number?` | Seconds between the writes of queued bumps, up to 60. Leave it out and every `Bump` is one write. See [Bump](/docs/reference/store#bump). |
 | `OnLoadFailed` | `((Player, Reason) -> boolean)?` | What to do when a load fails. See below. |
 | `Mock` | `boolean \| { Players: number?, CCU: number?, Throttled: boolean? }` | Puts this store on an in memory datastore, sized how you ask. See [Testing](/docs/guides/testing). |
 
@@ -95,6 +97,21 @@ what that kind carries. Your reducer gets `Ledger.Op<Ops>`, which narrows on `Op
 
 It takes every option `Ledger.New` takes and validates them the same way. The store it builds is the
 same object and behaves identically at runtime. See [Typed ops](/docs/concepts/typed-ops).
+
+## Ledger.Id
+
+```luau
+Ledger.Id() -> string
+```
+
+Creates a short id that is different on every server and on every call. It is the id Ledger puts on
+its own ops. Use it for an op you build yourself, a transfer or a transaction. Mint it one time and
+keep it for every retry.
+
+```luau
+local Op = { Id = Ledger.Id(), Kind = "GrantReward", Item = "Sword" }
+Store:EditOp(UserId, Op):Wait()
+```
 
 ## Ledger.Reason
 

@@ -12,7 +12,7 @@ at most one time on that key.
 
 ```luau
 Session:CommitOp({
-	Id = HttpService:GenerateGUID(false),
+	Id = Ledger.Id(),
 	Kind = "ProductGrant",
 	ProductId = 123456,
 	Once = `receipt:{Receipt.PurchaseId}`,
