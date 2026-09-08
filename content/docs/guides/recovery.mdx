@@ -5,7 +5,9 @@ description: Version history, resetting a profile, and deleting one properly.
 
 ## History
 
-Roblox keeps 30 days of versions for every datastore key, and `History` lists them.
+Roblox keeps a version for the first write to a key in each UTC hour, for 30 days after it stops
+being current. Later writes in the same hour overwrite that version. `History` lists them, so it
+shows the state at the end of each hour and nothing finer.
 
 ```luau
 local Rows, Why = Store:History(UserId, 25):Wait()

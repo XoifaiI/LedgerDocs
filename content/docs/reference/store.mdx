@@ -113,7 +113,8 @@ rather than trusting truthiness, or a failed read reads as "never granted" and y
 Store:History(Key: KeyLike, Limit: number?) -> Future<{ HistoryEntry }?, Reason?>
 ```
 
-Up to 30 days of versions, newest first. `Limit` is clamped to 1 through 100 and defaults to 25.
+Up to 30 days of versions, newest first, one per UTC hour the key was written in. `Limit` is
+clamped to 1 through 100 and defaults to 25.
 `nil` means the listing failed.
 
 ### PeekVersion
