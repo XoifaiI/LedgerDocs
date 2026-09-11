@@ -5,6 +5,19 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 5.2.2
+
+```diff
++ Reserve costs no datastore read when the key had a hold in the last 10 minutes. The stock stays cached that long after the last hold runs out
++ Reap code tidied
+
+! Apply answers Unresolved for every op while two or more transactions are parked on the key, even one your reducer refuses. Ask again once they settle
+```
+
+### Upgrading
+
+Install the new version.
+
 ## 5.2.1
 ```diff
 + Improved the reap system again
