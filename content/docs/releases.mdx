@@ -5,6 +5,21 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 5.3.0
+
+```diff
++ Transaction terms escape commas, brackets, = and %, so two different sets of fields never read as the same
++ Fixed a reaper bug that could half apply a transaction retried under its Id
++ Fixed WaitForLoaded answering nil for a player who rejoined mid load
+- Removed redundant checks
+
+! A transaction retried on 5.3.0 after it ran on an older server answers Spent if a leg string holds a comma, a bracket, = or %. Read the keys before you run it again under a new Id
+```
+
+### Upgrading
+
+Install the new version.
+
 ## 5.2.2
 
 ```diff
