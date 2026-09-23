@@ -48,10 +48,33 @@ end
 ## Reducer
 
 ```luau
-type Reducer<S, O = any> = (State: S, Op: Op<O>) -> S?
+type Reducer<S, O = any> = (State: S, Op: Op<O>) -> (S | Frozen<S>)?
 ```
 
 See [Writing a reducer](/docs/concepts/reducer).
+
+## Frozen
+
+```luau
+type Frozen<S>
+```
+
+Your state with every field read only, at every depth. It's how the state you are handed is at
+runtime. Annotate a reducer's state with it and a write into a nested table stops the build:
+
+```luau
+type Hero = { Gold: number, Stats: { Level: number } }
+
+Reducer = function(State: Ledger.Frozen<Hero>, Op)
+	local Next = table.clone(State)
+	Next.Stats.Level += 1 -- Property Level of table '{ read Level: number }' is read-only
+	return Next
+end,
+```
+
+An array or a map stays writable in the type, and so does what it holds, because Luau can't make an
+indexer read only yet. A write into one still throws while you play. In TypeScript `Ledger.Frozen`
+covers arrays and maps as well.
 
 ## Reason
 
@@ -100,7 +123,7 @@ What `Ledger.New` takes. See [Ledger.New](/docs/reference/ledger#ledgernew).
 ```luau
 type TypedConfig<D, O> = {
 	read Name: string,
-	read Reducer: (State: D, Op: Op<O>) -> D?,
+	read Reducer: (State: D, Op: Op<O>) -> (D | Frozen<D>)?,
 	read Default: D,
 	read Balance: string?,
 	read Migrations: { Migration }?,
@@ -110,7 +133,8 @@ type TypedConfig<D, O> = {
 ```
 
 What `Ledger.NewTyped` takes. The reducer gets the op as one of the kinds you named, and it has to
-give back your state or `nil`. See [Typed ops](/docs/concepts/typed-ops).
+give back your state or `nil`. That state can be typed [`Frozen`](#frozen). See
+[Typed ops](/docs/concepts/typed-ops).
 
 ## TypedStore and TypedSession
 

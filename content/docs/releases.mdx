@@ -5,10 +5,21 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 5.4.1
+
+```diff
++ Fixed Ledger.Frozen refusing a state that holds a map or array of tables
+```
+
+### Upgrading
+
+Install the new version.
+
 ## 5.4.0
 
 ```diff
 + A typed reducer can return a state whose nested tables are typed read only
++ Ledger.Frozen types a state as read only at every level, in Luau and in TypeScript
 ```
 
 ### Upgrading

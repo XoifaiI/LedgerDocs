@@ -103,6 +103,19 @@ There's one check the Luau side doesn't have. A kind that doesn't name its field
 On a store built with `New`, the op's fields all read as `unknown`, so narrow them with `typeIs`
 the way the Luau examples use `type()`.
 
+## Frozen state
+
+The state your reducer is handed is frozen at runtime. `Ledger.Frozen` says so in the type, at every
+depth, arrays and maps included. Annotate the state with it and a write that would throw while you
+play stops the build instead:
+
+```ts
+Reducer: (state: Ledger.Frozen<Profile>, op) => {
+	state.Items[op.Item] = true; // Index signature in type '{ readonly [x: string]: boolean; }' only permits reading
+	return { ...state, Items: { ...state.Items, [op.Item]: true } }; // fine
+},
+```
+
 ## The fields you can't pass
 
 `Id`, `Kind` and `OnceAt` belong to Ledger. In Luau, passing one in `Fields` warns and gets

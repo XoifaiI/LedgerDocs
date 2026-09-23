@@ -105,6 +105,37 @@ Nothing reads an op after your reducer has it, so a write was only ever going to
 you are handed is frozen for the same reason, except that one shows up while you play, as a
 [`Refused`](/docs/concepts/reasons) op rather than an error where you wrote it.
 
+To move that to the build as well, annotate the state with `Ledger.Frozen`. The op stays unannotated
+and still narrows:
+
+```luau
+type Hero = { Gold: number, Stats: { Level: number } }
+
+Reducer = function(State: Ledger.Frozen<Hero>, Op)
+	if Op.Kind == "LevelUp" then
+		local Next = table.clone(State)
+		Next.Stats.Level += 1 -- Property Level of table '{ read Level: number }' is read-only
+		return Next
+	end
+	return nil
+end,
+```
+
+`table.clone` keeps the read only types, so a clone is still read only one level down. That is how
+it behaves at runtime too. Give each level you change its own clone, and cast it to the shape you
+write:
+
+```luau
+local Next = table.clone(State) :: Hero
+local Stats = table.clone(State.Stats) :: { Level: number }
+Stats.Level += 1
+Next.Stats = Stats
+return Next
+```
+
+Arrays and maps stay writable in the type, and so does what they hold, because Luau can't make an
+indexer read only yet. A write into one still throws while you play.
+
 ## An op with no fields
 
 A kind takes its fields whether or not it has any:
