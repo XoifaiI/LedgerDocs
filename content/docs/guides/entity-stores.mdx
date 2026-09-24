@@ -94,7 +94,8 @@ anything that might change, because there's no rename.
 
 A clan or a listing takes writes from every player at once. Ledger writes down the name of every
 `Tx` leg and every `Transfer` that goes through. It keeps each name for 30 days. That is about
-1,700 a day on one key before those names fill the state cap.
+1,900 a day on one key before those names fill the state cap. A transfer into or out of a full key
+then answers `Full`, and the money stays where it was.
 
 `Edit` writes no name. A clan that only takes `Edit` has nothing to plan around. `Reserve` writes
 none. `Confirm` writes one only when you give it a [`Once`](/docs/concepts/once).

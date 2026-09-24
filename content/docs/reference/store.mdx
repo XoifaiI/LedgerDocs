@@ -292,7 +292,9 @@ Store:Bump(Name: string, Field: string, Amount: number) -> Future<boolean, Reaso
 String keyed stores only. Adds `Amount` to a total spread over 16 keys, named `<Name>#0` to
 `<Name>#15`. Each server writes its own shard, so servers do not queue behind each other on one key.
 `Shards` on the config sets the count, 1 to 99. Only ever raise it on a live store. A lower count
-stops reading the top shards, and their bumps leave every total.
+stops reading the top shards, and their bumps leave every total. During the deploy that raises it,
+an old server sums only the shards it knows. Its totals are short until that server stops. A new
+server keeps its own sum and reads every shard.
 
 `Amount` has to be positive. A total is spread over keys that cannot see each other, so nothing can be
 taken back out of one. Anything with a limit belongs on a single key, where `Reserve` can hold it.
@@ -390,10 +392,11 @@ What it hands back is frozen, like everything else Ledger gives you. To change a
 Store:Erase(Key: KeyLike) -> Future<boolean, Reason?>
 ```
 
-Throws the record away and leaves a tombstone. Anything the key still owes someone else goes first:
-money it was part way through sending, and units a `Reserve` set aside with a `To`. Ledger names
-whatever it could not pass on before the key went. For 8 days the tombstone refuses anything sent to
-the key, so money still being sent returns to whoever sent it.
+Throws the record away and leaves a tombstone. Money that the key was part way through sending goes
+first. If Ledger cannot pass it on, `Erase` answers [`Busy`](/docs/concepts/reasons) and changes
+nothing. Call it again later. A transfer that cannot be delivered is given back once it is 8 days
+old, so an `Erase` after that goes through. For 8 days the tombstone refuses anything sent to the
+key, so money still being sent returns to whoever sent it.
 See [Erase](/docs/guides/recovery#erase).
 
 The tombstone holds for the full 8 days even if the key is written to again. A session on another

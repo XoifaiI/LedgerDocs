@@ -100,9 +100,10 @@ So don't drop them, and don't write to them. Read them if you want, they're just
 
 ## Ops you don't know
 
-Return `nil` for anything you don't recognise. Ledger treats that as a refusal, and it makes a
-rolling deploy safe. An old server that's never heard of `NewFeatureOp` refuses it instead of
-guessing at it.
+Return `nil` for anything you don't recognise. Ledger treats that as a refusal. An old server that
+has never heard of `NewFeatureOp` refuses it instead of guessing at it. This does not make every new
+kind safe during a rolling deploy. A new kind that changes a field that other kinds read needs a
+migration. See [changing the reducer](/docs/guides/migrations#changing-the-reducer).
 
 Ledger checks this when the store is built. It hands the reducer a kind nothing knows. A reducer
 that returns a state for it gets a warning at `New`. Every unknown op on that store counts as

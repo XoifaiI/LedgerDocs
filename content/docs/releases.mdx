@@ -5,6 +5,46 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 6.0.0
+
+Most of this release is guard rails. Ledger now stops more mistakes before they reach your data, and
+a busy shared key gets a lot cheaper.
+
+```diff
++ A busy shared key folds about 30 times faster, and its applied names take about a quarter less room
++ A key that is full answers Full to a transfer instead of growing until it stops taking writes
++ Erase waits for money that is still on its way to another player, instead of taking it with the key
++ A transfer Id that two senders share can no longer settle against the wrong delivery
++ Calling Erase twice can no longer let a transfer be paid back after it arrived
++ A migration that edits Ledger's own fields gets them put back, with a warning that names the step
++ A session stops when another server erases its key, instead of showing an empty profile
++ A player who joins twice in one server keeps their data when the older copy leaves
++ Totals stay right while a deploy raises Shards
++ A copy never goes back to an older state than this server already wrote
++ Warnings show their full message instead of a table address
++ Warnings no longer blame an erase or the datastore when another server simply wrote first
++ A transaction the reaper is already cleaning up cannot be committed late
++ What Peek with a MaxAge and Follow hand you is frozen, like every other read
++ A server keeps at most 256 copies of keys that nobody follows
+
+! 6.0 writes records in a new format that 5.x cannot read. Do not run the two side by side
+! Erase can answer Busy now. It means money on the key is still being sent. Try again later
+! What Peek with a MaxAge and Follow hand you is frozen. Clone it before you change it
+```
+
+### Upgrading
+
+Stop every 5.x server before you start 6.0, the same way you would for any shutdown. A 5.x server
+cannot read a key that 6.0 has written, so a mixed deploy fails to load some players.
+
+Your data needs no migration. Each key moves to the new format by itself the next time it is written.
+
+Two small things to check in your own code:
+
+- If you change a value you got from `Peek` with a `MaxAge` or from `Follow`, clone it first.
+- If you call `Erase`, treat `Busy` as "not yet" and call it again later. A transfer that cannot be
+  delivered is given back after 8 days, and then the erase goes through.
+
 ## 5.4.1
 
 ```diff
@@ -36,175 +76,3 @@ Install the new version.
 
 ! A transaction retried on 5.3.0 after it ran on an older server answers Spent if a leg string holds a comma, a bracket, = or %. Read the keys before you run it again under a new Id
 ```
-
-### Upgrading
-
-Install the new version.
-
-## 5.2.2
-
-```diff
-+ Reserve costs no datastore read when the key had a hold in the last 10 minutes. The stock stays cached that long after the last hold runs out
-+ Reap code tidied
-
-! Apply answers Unresolved for every op while two or more transactions are parked on the key, even one your reducer refuses. Ask again once they settle
-```
-
-### Upgrading
-
-Install the new version.
-
-## 5.2.1
-```diff
-+ Improved the reap system again
-```
-
-### Upgrading
-
-Install the new version.
-
-## 5.2.0
-
-```diff
-+ Store:EditOp(Key, Op) appends an op with your own id. Sent again, it lands one time
-+ Ledger.Id() API to use the same method Ledger uses to generate ids
-+ Shards on the config sets how many keys a total is spread over, 1 to 99
-+ BumpEvery on the config queues bumps and writes one op per tally per window
-+ A reducer that returns a state for a kind it does not know gets a warning when the store is built
-+ In Studio, state a datastore cannot hold gets a warning at the next save, with the field named
-
-- An edit whose reducer threw answering Refused with no word of the throw
-
-! Reserve answers Busy, not Refused, when a key already holds 256. Ask again, a hold runs out in 15 minutes or less
-! With BumpEvery a Bump's Future answers once its window is written. Wait on it for a durable answer, the way Commit is. Do not wait and a crash can lose the window
-```
-
-### Upgrading
-
-Install the new version. A game that reads `Refused` from `Reserve` as sold out has to read `Busy`
-as try again.
-
-## 5.1.1
-
-```diff
-- Removed an old assert
-- A reap pass that listed all 32 shards at once and ran a small server out of list budget. The sweep sizes a reap pass from the list budget now, one shard on a small server
-```
-
-### Upgrading
-
-Install the new version.
-
-## 5.1.0
-
-A key that every server needs is read once for the whole fleet. The measure was 5,000 servers
-that read one 4 KB settings key every 30 seconds. Without the shared copy that was 100,000
-datastore reads in ten minutes. That is 40 MB a minute on one key, against a lane of 25 MB. With
-the shared copy it was 4 reads, at one MemoryStore unit per server per minute.
-
-```diff
-+ Store:Follow(Key) streams the state on one key, kept fresh from one shared copy
-+ Peek takes a MaxAge and answers a copy, this server's own first and the shared one next
-+ A Peek with a MaxAge of 0 reads the record through a claim. A fleet told to refresh reads it once
-+ A copy that a newer build folded answers Behind on an older build, the same as its record
-+ A total is a copy like a followed key. A fleet's first look at a cold pot reads the shards once
-+ Each server has its own stale limit between 60 and 75 seconds. One server refills a copy, not all of them
-
-! Follow and Peek with a MaxAge work on string keyed stores only. The copy carries your fields only, never _Received or _Held
-! A cold total costs five MemoryStore units. The two more are so the fleet can read it once
-! A followed state has to fit one MemoryStore item, 32 KB. A bigger key is read from the record
-! A copy shares the MemoryStore quota with holds, totals and leases, at one unit a tick per server
-```
-
-### Upgrading
-
-Install the new version.
-
-## 5.0.1
-
-```diff
-+ A confirm under a name an earlier confirm already spent answers Spent
-+ Reserve under a held name for another amount or field answers Spent
-
-- A key that filled up while a transaction was parked on it staying full after the transaction settled
-- An older server's compaction dropping a bump or a transfer on a field only a newer Default defines
-- Minor log improvements
-
-! A booking Id is for one purchase. Reserving under it again once the hold has gone still works, and a confirm under it then answers Spent
-! Confirm reads the hold first, so a purchase is 3 datastore calls and 7 MemoryStore units
-! A commit replayed after its op was folded into the snapshot answers Unresolved, the same as Edit
-```
-
-### Upgrading
-
-Install the new version. The stored record does not change, and your code does not change unless
-it reuses a booking Id from one purchase to the next. Give each purchase its own Id, the order id
-is the usual one.
-
-## 5.0.0
-
-The release that takes Ledger to 100k CCU.
-
-A hold moved off the key and into MemoryStore. A total is summed once a minute for the whole fleet
-instead of once a poll on every server. The reaper and the sweep split a pass between them rather
-than every server doing all of it. Measured at ~5,000 servers, the four workloads
-MemoryStore touches cost **1,170,705 datastore calls a minute on 4.x, to just 958 on 5.0**.
-
-| at 100k CCU, per minute | 4.x | 5.0 |
-| --- | --- | --- |
-| a pot every server draws every 5 seconds | 960,600 calls | 616 |
-| reaping every shard | 160,004 calls | 324 |
-| one key the whole fleet is repairing | 50,000 repairs | 10 |
-| 32 servers driving one key | 101 calls per success | 8 |
-
-A purchase is 3 datastore calls and 6 MemoryStore units, and it stays there from 200 servers to
-5,000.
-
-```diff
-+ Holds live in MemoryStore and cost the key nothing
-+ Holds answers what is held on a key
-+ Total reads a sum the whole fleet shares, so a polled pot costs one MemoryStore read
-+ Transfer takes a Field, so any number field moves between keys
-+ Confirm takes your own op, so your reducer decides what a checkout takes
-+ A transaction whose key another server is driving answers Busy at once, for one MemoryStore read
-+ The reaper and the sweep do each shard and each followed key once a minute across the whole fleet
-
-- Grant, and Reserve's To
-- _Booked, and everything that read it
-- The Balance requirement on RecoverTransfers and ClearDelivered
-
-! Confirm is Confirm(Key, Id, Kind, Fields) and needs your op
-! A hold is not in the fold: Peek shows the full field, an Edit can spend held units, and that checkout is Refused
-! Reserve needs MemoryStore, which in Studio means API access on, and answers Unresolved without it
-! A hold that has gone frees its name, and Reserve no longer answers Spent
-! A hold is capped at 15 minutes, so Hold only shortens one and a longer Hold throws. Reserve again under the same Id to keep a checkout open
-! Total is up to two minutes old by default, one window for this server's sum and one for the item it came from. Pass MaxAge for fresher, or zero to read the shards every time
-! 5.0 does not read a reservation a 4.x server made. Drain them before you upgrade
-```
-
-### Upgrading
-
-Install the new version. The stored record does not change, and a store that never called `Reserve`
-needs nothing else.
-
-**Confirm.** Give it the kind and fields of the op that spends the units, the way you would give
-`Edit`, and have your reducer refuse one the field cannot cover. A hold no longer lowers the field, so
-a reducer that spent nothing on confirm now has to.
-
-**Grant.** Reserve without `To` and move the units with `Transfer(From, To, Amount, Id, Field)`. The
-[buying sequence](/docs/guides/reservations#the-buying-sequence) is a hold and two transfers under two
-ids now.
-
-**Studio.** Turn API access on. Without MemoryStore every `Reserve` answers `Unresolved`, and a
-checkout still works, refused by your reducer when the stock has gone.
-
-<Callout type="warn">
-  If your game called `Reserve` on 4.x, drain it before you upgrade. Stop reserving, let every open
-  reservation be confirmed or released, and let the keys compact. A 5.0 server does not apply the old
-  reservation ops, so units a 4.x reservation was still holding come back to the field, and a key
-  whose log still carries one warns that it cannot be compacted until you erase it.
-</Callout>
-
-Do not roll 5.0 out alongside 4.x servers. The two fold a reservation differently, so for the length
-of the deploy the same key reads one way on an old server and another on a new one. Take the servers
-down, or accept that anything reserved in that window is voided.

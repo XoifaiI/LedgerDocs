@@ -199,4 +199,18 @@ Migrations = {
 }
 ```
 
+A new kind is not always safe for both. An old server refuses the new op and folds the key without
+it. If the new op changes a field that another kind reads, the old server can write an op that the
+new build refuses. For example, a new `Tax` op takes gold. An old server then writes a `SpendGold` op
+against gold that the tax already took. The old server tells the game that this op went through. The
+new build refuses it, so it never applies, and the key cannot compact again. When a new kind changes
+a field that other kinds read, add the migration above as well:
+
+```luau
+Migrations = {
+	-- ...
+	function(State) return State end,  -- 4: Tax takes gold, and SpendGold reads gold
+}
+```
+
 An old server then gets [`Behind`](/docs/concepts/reasons).

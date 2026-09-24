@@ -248,8 +248,8 @@ grant.
 
 Long enough that you don't have to think about it, and not so long that the set grows forever.
 
-A name is written into the applied set with the time it was applied. The next time any name is
-written to that key, anything in the set older than 30 days goes. So the set is a rolling window
+Ledger files each name under the day it was applied. The next time any name is written to that key,
+each day older than 30 days goes, so a name lasts 30 to 31 days. So the set is a rolling window
 rather than a pile that only gets bigger.
 
 The check for an already applied name happens before any of that, and against everything still in

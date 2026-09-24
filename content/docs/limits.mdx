@@ -54,24 +54,25 @@ Neither grows with uptime. Each is bounded by how much happened inside its own w
 ## Applied names
 
 The set of applied ids lives in the state, so it counts against the state cap. It does not grow
-without bound. Every time a name is written into it, anything already in there older than 30 days is
-dropped, whichever kind of name it is.
+without bound. Ledger keeps the names in one bucket per day. Every time a name is written, each day
+older than 30 days is dropped, whichever kind of name it holds. A name lasts 30 to 31 days.
 
-That sweep only rebuilds the set when something in it is actually old enough to go, so the usual
-write costs nothing.
+A write copies only the bucket for its own day. The cost of a write does not grow with the names on
+the key.
 
-One entry is about 40 bytes when Ledger picked the id, more if you named the transfer yourself, so a
-rolling 30 day window is nowhere near the state cap for any real player. An entry also carries a short
-fingerprint of what the name meant, which is what lets a name reused for a different amount answer
+One name is about 37 bytes when Ledger picked the id, and more if you named the transfer yourself. A
+rolling 30 day window is nowhere near the state cap for any real player. A name also carries a short
+fingerprint of what it meant. The fingerprint lets a name reused for a different amount answer
 [`Spent`](/docs/concepts/reasons) instead of `true`.
 
-`ClearDelivered` runs that sweep early. It cannot drop a delivery id sooner than 30 days, because a
-sender can ask for a refund up to that point and needs the evidence to know the delivery already
-happened.
+`ClearDelivered` runs that sweep early. It cannot drop a delivery id sooner than 30 days. A sender
+can ask for a refund up to that point, and the refund needs the evidence that the delivery happened.
 
 A key many players write to fills at the rate all of them write to it. Every `Tx` leg and every
-`Transfer` adds one name. One name is about 40 bytes and lasts 30 days. That is about 1,700 of
-them a day on one key before the names alone fill the state cap.
+`Transfer` adds one name. One name is about 37 bytes and lasts 30 days. That is about 1,900 names a
+day on one key before the names alone fill the state cap. A transfer into or out of a full key then
+answers [`Full`](/docs/concepts/reasons), and the money stays where it was. The key still takes
+other writes, and it takes transfers again as old names run out.
 
 `Reserve` adds no name. `Confirm` adds one only when you give it a [`Once`](/docs/concepts/once).
 Stock sold without one has no such ceiling.
