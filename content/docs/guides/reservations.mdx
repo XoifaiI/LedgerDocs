@@ -164,7 +164,9 @@ A total is the other shape. Nothing is limited, a lot of servers add to it, and 
 One key can only be written by one server at a time, so a key that every server writes spends its
 time retrying. `Bump` spreads the total over 16 keys and gives each server its own, so they stop
 queueing behind each other. `Shards` on the config sets the count, 1 to 99. Raise it for a large
-fleet. Never lower it on a live store. The bumps on the top shards then leave every total.
+fleet, to about one shard per 80 servers that bump the total. See
+[Limits](/docs/limits#reservations-and-totals). Never lower it on a live store. The bumps on the top
+shards then leave every total.
 
 ```luau
 local Events = Ledger.New({

@@ -37,6 +37,14 @@ State caps at 2 MB rather than 4, which leaves room for the ops sitting on top o
 An op that would push state over the cap is refused with [`Full`](/docs/concepts/reasons). Ops that
 shrink it are still allowed, so a cleanup works when you're already over.
 
+Size also decides how often a key can be written. Roblox lets one key take 4 MB of writes a minute,
+and every write stores the whole record again. An active player saves twice a minute. A player key
+near the 2 MB cap then spends its whole minute on autosaves, and a `Commit` waits behind them. Keep
+an active player key under about 1 MB.
+
+A key many servers write to meets the same limit sooner. Once it has taken 2,048 ops, its list of
+seen op ids alone is about 55 KB. That key takes about 70 writes a minute before its state counts.
+
 Hitting the unsaved caps gives you [`Backlog`](/docs/concepts/reasons), and in practice that only
 happens when the datastore is down.
 
@@ -173,6 +181,12 @@ then reads every key and caches the sum again. A cold total costs that server on
 shard. Each server has its own limit between 60 and 75 seconds. One server refills the sum, not
 all of them. `Bump` costs one request and no units. With `BumpEvery` a server pays one request per
 tally per window, however many times it bumps.
+
+Each server bumps one shard key, and one shard key takes about 80 writes a minute. With a
+`BumpEvery` of 60, that is about 80 servers on each shard. Set `Shards` to the number of servers
+that bump the tally, divided by 80. The default of 16 covers about 1,300 servers. Without
+`BumpEvery`, every bump is its own write, so count bumps a minute instead of servers. Raise `Shards`
+before you need it. Never lower it.
 
 See [Reservations and totals](/docs/guides/reservations).
 
