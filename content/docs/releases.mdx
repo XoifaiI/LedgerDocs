@@ -5,6 +5,31 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 6.0.1
+
+A small release. `Default` now only reaches new players, and cleaning up after transactions costs
+less.
+
+```diff
++ Changing a value in Default no longer changes players who already have data. It only reaches new players
++ A migration now reaches every player, including one whose data has not been compacted yet
++ The reaper removes a transaction marker in one try instead of spending budget on retries
++ Each run of a transaction gets a marker of its own, so the reaper only ever removes the one it checked
++ The reaper checks that a marker has not changed since it looked before it removes it
++ A transaction Id whose old marker is being cleaned up can run again straight away instead of answering Busy
+```
+
+### Upgrading
+
+Install the new version. Your data needs no migration.
+
+6.0.1 records a player's starting values the first time it saves them. Install it before you change
+a value in `Default`, so players who already have data keep the values they started with. A player
+that 6.0.1 has not saved yet takes the `Default` in place at that first save.
+
+A transaction Id reused for different terms answers `Busy` while its first run is still in progress,
+and `Spent` once that run went through.
+
 ## 6.0.0
 
 Most of this release is guard rails. Ledger now stops more mistakes before they reach your data, and
