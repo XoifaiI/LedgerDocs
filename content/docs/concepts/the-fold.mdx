@@ -13,7 +13,7 @@ State = fold(Snapshot, Ops)
 Reading a key means loading the record and replaying its ops through your reducer. Writing a key
 means appending one op. Nothing ever overwrites state.
 
-## Why that gets rid of the lock
+## Why there is no lock
 
 Two servers appending to the same key isn't a conflict, because neither append overwrites the other.
 Both ops end up in the log, the datastore settles what order they're in, and every server that folds
@@ -27,10 +27,10 @@ afterwards, the same way on every server.
   it doesn't depend on anyone's clock.
 </Callout>
 
-## Refusing is part of it
+## Refusing an op
 
-Your reducer returns `nil` to refuse an op. The op is still in the log, it just doesn't contribute
-anything. So when two servers both try to spend the same last 100 gold:
+Your reducer returns `nil` to refuse an op. The op is still in the log, but it has no effect on the
+state. So when two servers both try to spend the same last 100 gold:
 
 1. Server A appends `SpendGold{100}`, server B appends `SpendGold{100}`.
 2. The log holds both of them, in whatever order the datastore settled on.
@@ -40,20 +40,22 @@ Both servers see the same thing. The player spent 100 gold once.
 
 ## Compaction
 
-A log that only ever grows would eventually hit the 4 MB value limit. Once a log gets long or heavy,
-Ledger folds it down into a fresh snapshot and drops the ops it just absorbed. Autosave does this on
-its own, and `Session:Compact()` forces it.
+A log that only ever grows would eventually hit the 4 MB value limit. Once a log has many ops or
+many bytes, Ledger folds it into a new snapshot and removes the ops it compacted. Autosave does this
+on its own, and `Session:Compact()` forces it.
 
-Your reducer never sees any of that. Compaction keeps the ids of the ops it absorbed on the record,
-under `Seen`. A retry that arrives afterwards applies nothing. `Seen` keeps the newest 2048. A
-[`Once`](/docs/concepts/once) name, a transfer id and a transaction id live inside the state, under
-`_Received`, for 30 days.
+Compaction keeps the ids of the compacted ops on the record, under `Seen`, so a retry that arrives
+afterwards applies nothing. `Seen` is not part of the state, so your reducer never sees it. `Seen`
+keeps the newest 2048 ids, and records when it compacted them. An op whose `IdAt` is older than the
+ids `Seen` still keeps returns [`Unresolved`](/docs/concepts/reasons#unresolved) and applies
+nothing. A [`Once`](/docs/concepts/once) name, a transfer id and a transaction id live inside the
+state, under `_Received`, for 30 days.
 
 ## Reserved fields
 
 Ledger keeps its own bookkeeping in the state table, under keys starting with an underscore.
 
-`_Received` holds applied op ids, namespaced so a transfer, a transaction and a
+`_Received` holds the applied names, namespaced so a transfer id, a transaction id and a
 [Once](/docs/concepts/once) name can't collide. `_Held` holds money set aside by a
 [transfer](/docs/guides/transfers) that hasn't finished yet.
 
@@ -63,7 +65,7 @@ accident and Ledger puts them back. Write your own values into them and you can 
 
 ## What you can store
 
-Whatever a datastore can hold, so JSON. Tables, strings, numbers, booleans. No Instances, no
+Anything a datastore can store as JSON: tables, strings, numbers and booleans. No Instances, no
 Vector3, no functions, no cyclic tables, no tables that mix array and dictionary keys, no NaN or
 inf. Buffers are fine. Ledger checks this on the way in and refuses the op with
 [`Invalid`](/docs/concepts/reasons) instead of letting the save fail later.

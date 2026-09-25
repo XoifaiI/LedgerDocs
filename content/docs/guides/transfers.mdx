@@ -20,13 +20,13 @@ local Ok, Why = Store:Transfer(FromUserId, ToUserId, 250):Wait()
 `Balance` names the field it moves. It has to be a number field that's already in `Default`, and
 without it `Transfer` throws.
 
-## What actually happens
+## What happens
 
 It's three steps, not one write.
 
 **Reserve.** Ledger appends an op to the sender that takes the money out of the balance and puts it
-in `_Held` under a transfer id. If the sender doesn't have enough, your reducer never even sees it,
-the reserve is refused and you get `Refused`.
+in `_Held` under a transfer id. If the sender doesn't have enough, Ledger refuses the reserve without
+calling your reducer, and `Transfer` returns `Refused`.
 
 **Deliver.** It appends an op to the receiver that adds the money and records the transfer id in
 their `_Received`.
@@ -34,39 +34,40 @@ their `_Received`.
 **Settle.** It goes back to the sender and drops the hold, because the money has arrived.
 
 Money is only ever in one of three places: the sender's balance, the sender's `_Held`, or the
-receiver's balance. There's no moment where it's in two, and no moment where it's in none. That's
-what makes it safe to crash halfway.
+receiver's balance. There's no moment where it's in two, and no moment where it's in none. So a crash
+partway through cannot lose or duplicate money.
 
-## Crashing halfway
+## If a server crashes during a transfer
 
 If the server dies between reserve and deliver, the money is sitting in the sender's `_Held`. It's
 out of their balance so they can't spend it twice, and it hasn't arrived yet.
 
-Ledger picks that up on its own. A background sweeper notices held money and finishes the job, and
-the sender's next load kicks off a recovery too. You don't have to write a cron job for this and you
-shouldn't call `RecoverTransfers` by hand in normal operation.
+Ledger picks that up on its own. A background sweeper notices held money and completes the transfer,
+and the sender's next load starts a recovery too. You don't need to schedule anything for this, and
+you shouldn't call `RecoverTransfers` by hand in normal operation.
 
 If the receiver turns out to be gone or the delivery keeps failing, the hold eventually expires and
 the money goes back to the sender.
 
 ## Ids and retries
 
-By default each transfer gets a fresh id, which means calling it twice moves the money twice. That's
-usually what you want for a trade.
+By default each transfer gets a fresh id, which means calling it twice moves the money twice. That is
+only safe when the call is never retried, such as a one off tip. A trade can be retried, so give it
+an id.
 
-When it's a retry of the same logical transfer, name it:
+When a call might be a retry of the same transfer, pass an id:
 
 ```luau
 local Ok, Why = Store:Transfer(From, To, 250, `trade:{TradeId}`):Wait()
 ```
 
-Now a second call with that id doesn't move anything again. You get `true` back, because the transfer
-already went through. That's the answer to retry on, and it stays `true` however many times you ask.
+Now a second call with that id doesn't move anything again. It returns `true`, because the transfer
+already went through. Every retry with that id within 30 days returns `true`, so retrying is safe.
 
-The amount and the receiver have to match on every attempt. A name that already went through, asked
-again for a different amount or a different key, answers [`Spent`](/docs/concepts/reasons). Ledger
-records what a name meant next to the name, so it can tell an honest retry from the same name being
-reused for something else.
+The amount and the receiver have to match on every attempt. Calling again with the same id but a
+different amount or receiver returns [`Spent`](/docs/concepts/reasons). Ledger keeps a fingerprint of
+the amount and both keys with each id, so it can tell a retry from an id reused for a different
+transfer.
 
 Ids are 1 to 64 characters. The id has to be the same string on every attempt, so make it once and
 keep it somewhere the retry can read it:
@@ -79,57 +80,58 @@ Store:Transfer(From, To, 250, HttpService:GenerateGUID(false)):Wait()
 Store:Transfer(From, To, 250, `trade:{Trade.Id}`):Wait()
 ```
 
-The second line uses a GUID too. It works because the GUID was made once and the retry reads the same
-one. Making a GUID at the call site is what breaks. Every attempt is then a different transfer, so
-Ledger has nothing to match it against and the money moves again.
-
-`TradeId` is whatever already names that trade. If nothing names it yet, make the id when the trade
-opens and store it on the trade, next to the two players and the offer. An order id, a match id and a
-receipt id all work the same way.
+`Trade.Id` is whatever already names that trade, and it can be a GUID too. What matters is that it
+was made once, so every retry reads the same one. If nothing names the trade yet, make the id when
+the trade opens and store it on the trade, next to the two players and the offer. An order id, a
+match id and a receipt id all work the same way.
 
 Never build an id from the clock. Never build one from the amount and the two keys either. The same
-two players can trade the same amount twice, and you would swallow the second trade as a duplicate.
+two players can trade the same amount twice, and Ledger would treat the second trade as a retry of
+the first and skip it.
 
 [Where the id comes from](/docs/guides/transactions#where-the-id-comes-from) covers the three cases
 and how long each id has to survive.
 
-## Reading the answer
+## Checking the result
 
 `true` means the money moved and both sides are settled.
 
 `Refused` means the sender didn't have it. An amount that isn't positive and finite throws at the call
-site instead, because that's a bug in the caller rather than an answer about the money.
+site instead, because that's a bug in the caller rather than a result about the money.
 
-`Spent` means the hold sat there long enough to expire and the money went **back to the sender**.
-Nothing moved and that id is finished, so don't hand anything over on it. A transfer that actually
-went through answers `true`, not this.
+`Spent` has two meanings, and both come only from a call with an id. Either the id already went
+through for a different amount or a different key, or the hold sat there long enough to expire and
+the money went **back to the sender**. Either way nothing moved on this call, so don't give anything
+out on it. A transfer that actually went through returns `true`, not this.
 
-`Busy` means a transaction is holding the sender's key. Ledger has already scheduled a cleanup pass,
-try again shortly.
+`Busy` means a transaction is holding the sender's key. Ledger has already scheduled a cleanup pass.
+Try again shortly.
 
 `Unresolved` means the reserve went through but the delivery didn't finish. The money is set aside
-and Ledger will either finish it or refund it on its own. Don't retry with a new id, that would move
-it twice, and don't tell the player it failed.
+and Ledger will either finish it or refund it on its own. Don't retry with a new id, because that
+would move it twice. Don't tell the player it failed.
 
-## Housekeeping
+## Cleanup
 
 Delivered transfer ids sit in the receiver's `_Received` so a redelivery can't pay twice. They're
 dropped after 30 days, which is well past the point any retry could still turn up.
 
-`Store:ClearDelivered(Key)` forces that pass early. You basically never need it.
+`Store:ClearDelivered(Key)` drops the ids that are already past 30 days now, rather than at the next
+write of an id to the key. You rarely need it.
 
-`Store:RecoverTransfers(Key)` forces a recovery on one key. The sweeper already does this, so it's
-here for a support tool, or for a live incident where you want one key dealt with right now.
+`Store:RecoverTransfers(Key)` forces a recovery on one key. The sweeper already does this, so use it
+from a support tool, or in a live incident where you want one key dealt with right now.
 
-Both are about money moving between keys, so both want a store that names a `Balance` field. On a
+Both are about money moving between keys, so both require a store that names a `Balance` field. On a
 store without one they throw where you called them.
 
 <Callout type="warn">
-  `Store:Erase(Key)` passes on any money the key was sending out, including money recovery had
-  stopped retrying because the key could still have been given it back. After that it turns away
-  anything sent to the key and answers [`Held`](/docs/concepts/reasons), so the sender gets it back
-  instead of losing it. That lasts a full 8 days, and a write to the key does not cut it short. If a
-  receiver won't take one, it names what was left and you settle that one yourself. See
+  `Store:Erase(Key)` first delivers the money the key was still sending. That includes transfers
+  between 7 and 8 days old, which recovery has stopped resending while it waits to give them back.
+  If a receiver does not take one, `Erase` returns [`Busy`](/docs/concepts/reasons) and changes
+  nothing, so call it again later. After an erase, a transfer sent to the key is refused with
+  [`Held`](/docs/concepts/reasons), and the sender gets the money back instead of losing it. That
+  lasts 8 days, and a write to the key does not end it early. See
   [Erase](/docs/guides/recovery#erase).
 </Callout>
 

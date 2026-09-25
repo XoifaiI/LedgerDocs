@@ -3,18 +3,18 @@ title: Reservations and totals
 description: Holding a limit on one key, and counting something a lot of servers write to.
 ---
 
-Two problems look like they need a transaction and don't.
+Two problems look like they need a transaction but don't.
 
 The first is a limit: 500 copies of a sword, 40 raid places, one seat per table. The second is a
-total: an event pot, a kill counter, a donation tally.
+total: an event prize pool, a kill counter, a donation total.
 
-Both are cheaper and simpler on a single key than across two, and each has its own tool.
+Both are cheaper and simpler on one key than across two, and each has its own methods.
 
 ## Reserve, Confirm, Release
 
-A reservation holds units of a number field on one key. The hold lives in MemoryStore, not on the
-key: the field still reads what it was, and `Holds` says how much of it is spoken for. A second
-buyer is turned away at `Reserve`, before checkout rather than at it.
+A reservation holds units of a number field on one key. The hold is stored in MemoryStore, not on
+the key. The field keeps its value, and `Holds` returns how much of it is held. When nothing is left
+to hold, `Reserve` refuses the next buyer before checkout starts.
 
 ```luau
 local Shop = Ledger.New({
@@ -33,16 +33,16 @@ if not Ok then
 end
 ```
 
-`Stock` still reads 500, `Holds("sword", "Stock")` reads 1, and the next `Reserve` sees 499 to give.
-Two things can happen to the hold:
+`Stock` is still 500, `Holds("sword", "Stock")` returns 1, and the next `Reserve` can hold up to 499.
+A hold ends in one of two ways:
 
 ```luau
 Shop:Confirm("sword", OrderId, "Sell", { Count = 1 }):Wait()   -- your op spends the unit, stock is 499
 Shop:Release("sword", OrderId):Wait()                           -- the hold goes, stock was never touched
 ```
 
-`Confirm` takes the kind and fields of your own op, the ones you would give `Edit`. Your reducer
-decides what a checkout takes off the key and refuses one the field cannot cover:
+`Confirm` takes the kind and fields of your own op, the same ones you would pass to `Edit`. Your
+reducer decides what a checkout takes from the key, and refuses one the field can't cover:
 
 ```luau
 -- in your reducer
@@ -54,24 +54,30 @@ if Op.Kind == "Sell" then
 end
 ```
 
-That reducer is the gate. A hold is advice about who gets to checkout first, and it is not in the
-fold, so an `Edit` can spend units somebody holds and their `Confirm` is then `Refused`. A hold that
-was lost, or never made because the MemoryStore was down, costs the same: one refused checkout and
-never an oversell. Show players `Holds` rather than the field when "3 left" has to mean it.
+The reducer is what enforces the limit. A hold only decides who gets to check out first, and it is
+not part of the fold, so an `Edit` can spend units someone holds, and their `Confirm` then returns
+`Refused`. A hold that was lost, or never made because MemoryStore was down, has the same effect: one
+refused checkout, never an oversell. Show players the field minus `Holds` when "3 left" has to be
+accurate.
 
-Asking to reserve under a name that already holds the same thing answers `true` and holds nothing
-extra, so a retry is safe. Under a different amount or field it answers `Spent`. Confirming twice
-spends once while the key remembers the op. The key remembers an op while it is in the log, and for
-the next 2048 ops it absorbs. Once a hold has gone, a new hold can be taken under the same name. A
-confirm under it does not sell again while the key remembers the first confirm. Give each purchase
-its own Id. A confirm that may be retried later than the key remembers it needs a
-[`Once`](/docs/concepts/once), see [Confirm](/docs/reference/store#confirm).
+`Reserve` with an id that already holds the same amount of the same field returns `true` and holds
+nothing more, so a retry is safe. With a different amount or field it returns `Spent`.
+
+`Confirm` twice with one id spends once while the key still has that op's id. The key keeps an id
+while the op is in the log, and for the next 2048 ops it compacts. After a hold ends, a new hold can
+use the same id, but a `Confirm` under it doesn't sell again while the key has the first confirm's
+id. Give each purchase its own id.
+
+A confirm you may retry later than that needs `IdAt` in its fields: the time you first sent it, the
+same on every retry. Once the key has dropped the id, the retry returns
+[`Unresolved`](/docs/concepts/reasons) and sells nothing. See
+[Confirm](/docs/reference/store#confirm).
 
 ### One key is one item
 
-`"sword"` and `"shield"` are separate keys with separate records, so they hold separate stock.
-`Default` is not a template for an item. It is the starting state of a key nothing has written yet,
-and the stock of each item arrives as an op like anything else:
+`"sword"` and `"shield"` are separate keys with separate records, so each has its own stock.
+`Default` is not a template for an item. It is the state of a key nothing has written to yet, and
+each item's stock is set by an op like any other change:
 
 ```luau
 -- in your reducer
@@ -85,34 +91,34 @@ Shop:Edit("sword", "Restock", { Amount = 500 }):Wait()
 Shop:Edit("shield", "Restock", { Amount = 1000 }):Wait()
 ```
 
-Start the default at zero. A key nobody has written still folds to it, so a default of 500 means a
-misspelled item id has 500 in stock and `Reserve` says yes to all of it. Give the restock a
-[`Once`](/docs/concepts/once) name if it should land one time however many servers run it.
+Start the default at zero. A key nobody has written to still folds to it, so with a default of 500 a
+misspelled item id has 500 in stock and `Reserve` accepts all of it. Give the restock a
+[`Once`](/docs/concepts/once) name if it should apply once however many servers run it.
 
-The second argument to `Reserve` is a field, so one key can hold several pools. Keep that for units
-that share a limit. One key is one write queue, and putting every item on one key makes every
-purchase wait behind every other.
+The second argument to `Reserve` is a field, so one key can hold several pools. Only do that for
+units that share a limit. Each key has one write queue, so putting every item on one key makes every
+purchase wait for every other.
 
-### Nobody has to clean up
+### Holds expire on their own
 
-A hold lasts 15 minutes and then runs out on its own. Nothing has to give it back, because nothing
-was taken. `Hold` on the options sets a shorter one. Fifteen minutes is the cap as well as the
-default, so `Hold` can only shorten a hold. A `Hold` above the cap throws where you wrote the call.
+A hold expires after 15 minutes. Nothing has to be returned, because nothing was taken. The `Hold`
+option sets a shorter time. Fifteen minutes is both the default and the maximum, so `Hold` can only
+shorten a hold. A `Hold` above the maximum throws an error at the call.
 
-A checkout that stays open longer calls `Reserve` again under the same Id. That moves the end of the
-hold out and holds nothing extra. Call `Release` when the player walks away, so the next buyer does
-not wait the 15 minutes.
+For a checkout that stays open longer, call `Reserve` again with the same id. That extends the hold
+and holds nothing more. Call `Release` when the player leaves checkout, so the next buyer doesn't
+wait 15 minutes.
 
-One key holds 256 at once. Past that `Reserve` answers [`Busy`](/docs/concepts/reasons).
-Holds are being made faster than they are confirmed or released. A hold runs out in 15
-minutes or less. Ask again shortly. `Refused` means the stock cannot cover the units.
+One key can have 256 holds at once. Past that, `Reserve` returns [`Busy`](/docs/concepts/reasons),
+which means holds are being made faster than they are confirmed or released. Every hold expires
+within 15 minutes, so try again shortly. `Refused` means the field can't cover the units.
 
-The stock a hold is judged against is what the key read last. A refusal reads the key again before
-it answers, so a restock is seen. `Reserve` needs MemoryStore, which in Studio means API access on.
-Without it `Reserve` answers [`Unresolved`](/docs/concepts/reasons) and checkout falls to first come,
-which the reducer enforces.
+`Reserve` checks a hold against the last value it read from the key. Before it refuses, it reads the
+key again, so it sees a restock. `Reserve` needs MemoryStore, which in Studio means API access has to
+be on. Without it, `Reserve` returns [`Unresolved`](/docs/concepts/reasons), and checkout falls back
+to first come, first served, which the reducer enforces.
 
-## Handing the units to another key
+## Moving the units to another key
 
 `Confirm` spends the units where they are. `Transfer` with a field moves them somewhere else:
 
@@ -120,18 +126,18 @@ which the reducer enforces.
 Shop:Transfer("sword", tostring(Player.UserId), 1, OrderId .. ":unit", "Stock"):Wait()
 ```
 
-That is the same three op transfer a balance takes, on the field you name, so it is escrowed on the
-way, deduped by its id, and finished or given back by the recovery sweep if the server dies between
-the legs. See [Transfers](/docs/guides/transfers).
+That is the same three op transfer a balance uses, on the field you name. The units are set aside on
+the way, the transfer applies once per id, and the sweeper finishes or refunds it if the server stops
+between the steps. See [Transfers](/docs/guides/transfers).
 
-A transfer id belongs to one transfer, and the field is part of what it means, so the price and the
-unit of a purchase carry two ids. The same id on a different field answers
+A transfer id belongs to one transfer, and the field is part of that transfer, so the price and the
+unit of a purchase need two ids. The same id on a different field returns
 [`Spent`](/docs/concepts/reasons).
 
 ## The buying sequence
 
-The order matters, because a server can die between any two calls. This order recovers from all of
-them:
+The order matters, because a server can stop between any two calls. This order recovers from a stop
+at any point:
 
 ```luau
 Shop:Reserve("sword", "Stock", 1, OrderId):Wait()
@@ -144,29 +150,29 @@ A transfer moves a field between two keys of one store, so both keys have to sui
 mode. A player keyed store cannot hold a key called `"shop"`, and a string keyed store cannot take a
 `UserId` as a number. Ledger throws at the call when a key does not suit the store.
 
-Both transfers are idempotent under their ids, so running the whole thing again after a crash lands
-each exactly once. A transfer under a name that already moved answers finished. The hold runs out on
-its own once the unit has left the shop, or sooner if you `Release` it.
+Each transfer applies once per id, so running the whole sequence again after a crash applies each
+one exactly once. A transfer whose id already moved returns `true`. The hold expires once the unit has
+left the shop, or sooner if you `Release` it.
 
-Die before the payment and nothing was taken. Die between the two transfers and running the sequence
-again pays nothing twice and hands the unit over once.
+If the server stops before the payment, nothing was taken. If it stops between the two transfers,
+running the sequence again charges once and delivers the unit once.
 
-A purchase that stays on one key is simpler: `Confirm` with your own op, and put a
-[`Once`](/docs/concepts/once) name on any op that grants something elsewhere so `DidApply` can answer
-whether it went through. Don't use the reservation name for that. Once the key compacts, a repeat `Confirm`
-answers [`Unresolved`](/docs/concepts/reasons), and a confirmed, a released and an expired hold all
-leave the same absence.
+A purchase that stays on one key is simpler: `Confirm` with your own op. Put a
+[`Once`](/docs/concepts/once) name on any op that grants something on another key, so `DidApply` can
+return whether it applied. Don't use the reservation id for that. After the key compacts, a repeated
+`Confirm` returns [`Unresolved`](/docs/concepts/reasons), and a confirmed, a released and an expired
+hold all look the same: no hold.
 
 ## Bump and Total
 
 A total is the other shape. Nothing is limited, a lot of servers add to it, and you want the sum.
 
-One key can only be written by one server at a time, so a key that every server writes spends its
-time retrying. `Bump` spreads the total over 16 keys and gives each server its own, so they stop
-queueing behind each other. `Shards` on the config sets the count, 1 to 99. Raise it for a large
-fleet, to about one shard per 80 servers that bump the total. See
-[Limits](/docs/limits#reservations-and-totals). Never lower it on a live store. The bumps on the top
-shards then leave every total.
+Only one server can write a key at a time, so a key that every server writes to spends most of its
+time retrying. `Bump` spreads the total over 16 keys and gives each server its own, so servers don't
+wait for each other. `Shards` in the config sets the number of keys, 1 to 99. For a large fleet,
+raise it to about one shard per 80 servers that bump the total. See
+[Limits](/docs/limits#reservations-and-totals). Never lower it on a live store: the bumps on the
+removed shards would drop out of every total.
 
 ```luau
 local Events = Ledger.New({
@@ -176,35 +182,35 @@ local Events = Ledger.New({
 	Reducer = Reducer
 })
 
-Events:Bump("summerpot", "Gold", 25):Wait()
+Events:Bump("summer", "Gold", 25):Wait()
 
-local Pot = Events:Total("summerpot", "Gold"):Wait()
+local Pool = Events:Total("summer", "Gold"):Wait()
 ```
 
-`Total` answers a sum cached in MemoryStore for one request unit. One server a minute reads every
-shard and refills it. Read it on a timer.
+`Total` returns a sum cached in MemoryStore, for one request unit. Once a minute, one server reads
+every shard and updates the cached sum. Read it on a timer.
 
-A game that bumps on every action sets `BumpEvery` on the store, in seconds up to 60. The server
-then queues its bumps and writes one op per tally per window. `Bump` answers a Future that
-completes when the window is written. Wait on it the way you wait on `Commit`, or do not and it is
-hopeful like `Apply`. A server that crashes loses the bumps of its last window.
+If your game bumps on every action, set `BumpEvery` on the store, in seconds up to 60. The server
+then queues its bumps and writes one op per total per window. `Bump` returns a Future that completes
+when the window is written. Wait on it like `Commit`, or don't wait and treat it like `Apply`. A
+server that crashes loses the bumps of its last window.
 
-`Total` answers what has been added, not what the 16 keys hold. `Bump` keeps its own running count on
-each shard and never touches the field your reducer owns, so the `Default` never counts toward the
-total. A tally nobody has added to reads 0.
+`Total` returns what has been added, not the sum of the field on the 16 keys. `Bump` keeps its own
+count on each shard and never changes the field your reducer owns, so `Default` never counts toward
+the total. A total nobody has added to returns 0.
 
 ### A total can only go up
 
-`Bump` refuses anything that is not positive. No shard can see the others, so no shard knows the sum,
-and nothing can hold a limit across them.
+`Bump` refuses any amount that isn't positive. No shard can read the others, so no shard knows the
+sum, and nothing can enforce a limit across them.
 
-That is the whole difference between the two tools. A reservation can hold a limit because everything
-is on one key. A total gives that up to get the writes.
+That is the difference between the two. A reservation can enforce a limit because everything is on
+one key. A total gives that up so many servers can write at once.
 
-If you need both, split the stock into fixed pools and reserve against a pool. Each pool holds its
-own share, so the limit survives. One pool empties before another, so fall through to the next.
+If you need both, split the stock into fixed pools on separate keys and reserve from one pool. Each
+pool enforces its own share, so the overall limit holds. When one pool runs out, try the next.
 
-## Which one, and when it really is a transaction
+## Which tool to use
 
 | | |
 | --- | --- |
@@ -214,9 +220,8 @@ own share, so the limit survives. One pool empties before another, so fall throu
 | A balance moves between two keys | [`Transfer`](/docs/guides/transfers) |
 | Two keys must change together and one change can't be undone | [`Tx`](/docs/guides/transactions) |
 
-The question that sorts them is what an undo would look like. If you can describe it, you want a
-reservation or a transfer. If the undo is asking the other player to give the sword back, you want a
-transaction.
+To choose, ask what undoing it would take. If you can write that as an op, use a reservation or a
+transfer. If undoing it means asking the other player to give the sword back, use a transaction.
 
 Trading a sword for a shield is a real transaction. Selling a sword from a shop is not.
 
@@ -229,9 +234,9 @@ Measured on the fake datastore, 100 limited stock purchases:
 | A transaction across buyer and shelf | 800 |
 | Reserve and confirm | 201 |
 
-`Reserve` and `Release` cost no datastore request at all, two MemoryStore request units each, and the
-first hold on a key reads it once. `Confirm` costs one request and two units. Moving the units to
-another key is a transfer, three requests.
+`Reserve` and `Release` cost no datastore requests, only two MemoryStore request units each, and the
+first hold on a key reads the key once. `Confirm` costs one request and two units. Moving the units to
+another key is a transfer, which costs three requests.
 
-A hold never queues on the key, so 500 buyers reserving at once are answered by MemoryStore and only
-the ones who got a hold go on to write. That is what the transaction version could not do.
+A hold never waits in the key's write queue. When 500 buyers reserve at once, MemoryStore handles
+them, and only the buyers who got a hold go on to write. A transaction can't do that.

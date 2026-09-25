@@ -3,8 +3,8 @@ title: Transactions
 description: Two to four keys that all change together, or none of them do.
 ---
 
-`Tx` writes to several keys at once and guarantees all of them took it or none of them did. The keys
-can be in two different stores, and none of them have to be online.
+`Tx` writes to several keys at once and guarantees that either every write is applied or none is.
+The keys can be in two different stores, and none of them needs a loaded session.
 
 ```luau
 local Ok, Why = Store:Tx(`trade:{TradeId}`, {
@@ -18,23 +18,23 @@ sword, the buyer doesn't lose the gold. There's no window where one of those is 
 isn't.
 
 <Callout type="warn">
-  A transaction is the most expensive thing Ledger does, and a lot of the work it gets handed belongs
-  somewhere cheaper. Selling limited stock, holding a place, counting a pot: those are all one key.
+  A transaction is the most expensive thing Ledger does, and many jobs people use it for can be done
+  more cheaply. Selling limited stock, reserving a slot and keeping a total each need only one key.
   Read [Reservations and totals](/docs/guides/reservations) first.
 
-  What sorts them is whether two keys really have to change together, and whether either change could
-  be undone afterwards. Trading a sword for a shield needs this. Selling a sword from a shop does not.
+  Use a transaction only when two keys must change together, and neither change could be undone
+  afterwards. Trading a sword for a shield needs this. Selling a sword from a shop does not.
 </Callout>
 
 ## The id
 
-The id comes first and it's required. It has to be a stable name derived from the thing you're
-settling, so a trade id, an order id, a match id. Never build it from the clock, and never mint one
-inside the `Tx` call.
+The id comes first and it's required. It has to be stable and derived from the thing the
+transaction is for, such as a trade id, an order id or a match id. Never build it from the clock,
+and never create one inside the `Tx` call.
 
-A stable id is what makes a retry safe. Running the same id again doesn't do it twice. It finds every leg
-already settled and answers `true` having moved nothing, so an `Unresolved` you want to chase is just
-the same call again:
+A stable id is what makes a retry safe. Running the same id again doesn't do it twice. It finds every
+leg already settled and returns `true` having moved nothing, so to retry an `Unresolved`, make the
+same call again:
 
 ```luau
 local Ok, Why = Store:Tx(`trade:{TradeId}`, Legs):Wait()
@@ -43,21 +43,23 @@ if Why == Ledger.Reason.Unresolved then
 end
 ```
 
-The legs have to match on every attempt. Ledger records what a name meant next to the name, so the
-same id run again for a different set of keys or a different amount answers
-[`Spent`](/docs/concepts/reasons) rather than `true`. That holds however long ago the first one ran.
-Pass the same legs on the retry and you get the `true` you are chasing.
+The legs have to match on every attempt. Ledger keeps a fingerprint of the legs with the id, so the
+same id run again for a different set of keys or a different amount returns
+[`Spent`](/docs/concepts/reasons) rather than `true`. Ledger keeps the id for 30 days, the same as
+every [applied name](/docs/limits#applied-names). After that the id is forgotten, and running it
+again applies it again.
 
 Ids are 1 to 50 characters.
 
 ### Where the id comes from
 
-Two of the three you get handed, one you have to invent.
+A purchase and a request from outside the game each come with an id. A trade does not, so you
+create one.
 
-**A purchase** gives you `ReceiptInfo.PurchaseId`. Roblox keeps calling `ProcessReceipt` with the same
-one until you return `PurchaseGranted`, so it survives a server restart as well as a retry.
+**A purchase** comes with `ReceiptInfo.PurchaseId`. Roblox keeps calling `ProcessReceipt` with the
+same one until you return `PurchaseGranted`, so it survives a server restart as well as a retry.
 
-**A trade** gives you nothing, so mint the id when the trade opens rather than when it commits:
+**A trade** has no id, so create one when the trade opens rather than when it commits:
 
 ```luau
 local function OpenTrade(A: Player, B: Player)
@@ -72,21 +74,22 @@ end
 Store:Tx(`trade:{Trade.Id}`, Legs):Wait()
 ```
 
-`Ledger.Id` is fine there because it's minted once and held. What breaks is generating one inside
-the `Tx` call, since every retry would be a new transaction and apply the money again.
+`Ledger.Id` is fine there because it's created once and stored on the trade. What breaks is
+generating one inside the `Tx` call, since every retry would be a new transaction and move the money
+again.
 
 **Anything from outside**, a webhook or your own website, should use the sender's order id. They're
 the ones who retry, so their id is the one that stays the same when they do.
 
-The rule underneath all three: the id has to live at least as long as whatever might retry it. For a
-purchase Roblox holds it. For a trade only the hosting server would retry, so that server's memory is
-enough. If you can't name what would retry, you don't need a durable id at all.
+In all three cases, the id has to last at least as long as anything that might retry the call. For
+a purchase Roblox stores it. For a trade only the hosting server would retry, so that server's memory
+is enough. If nothing would retry the call, the id does not need to outlive it.
 
 ## The legs
 
 Between two and four legs. Each one names a key and an op.
 [Limits](/docs/limits#transactions) explains where those two numbers come from. Read it before you
-reach for a fourth leg.
+add a fourth leg.
 
 ```luau
 {
@@ -101,16 +104,16 @@ reach for a fourth leg.
 Use `UserId` when the target store uses player keys and `Key` when it uses string keys. Ledger
 checks which one the target store wants and throws if you gave it the wrong one.
 
-A transaction can only touch a key once, so two legs pointing at the same key is an error rather
-than something it tries to merge.
+A transaction can only touch a key once. Ledger throws if two legs name the same key, and does not
+merge them.
 
-Don't put `Once` on a leg. The transaction id already makes every leg land at most one time, and
-Ledger throws if it sees one.
+Don't put `Once` on a leg. The transaction id already makes every leg apply at most once, and Ledger
+throws if it sees one.
 
-### A leg will not land on an erased key
+### A leg will not apply to an erased key
 
-A key that was [erased](/docs/guides/recovery) turns a leg away for the 8 days its tombstone lasts,
-and the whole transaction answers [`Refused`](/docs/concepts/reasons) with a warning naming the key.
+A key that was [erased](/docs/guides/recovery) refuses a leg for the 8 days its tombstone lasts, and
+the whole transaction returns [`Refused`](/docs/concepts/reasons) with a warning naming the key.
 Nothing is applied to any of the other keys.
 
 ```luau
@@ -122,7 +125,7 @@ Store:Tx("order1", {
 }):Wait()   --> false, Refused
 ```
 
-Once the tombstone runs out the key takes legs again.
+Once the tombstone runs out the key accepts legs again.
 
 ### A leg reads what is stored, not what a session is holding
 
@@ -130,9 +133,9 @@ Every leg folds the record on the datastore. A live session that has taken ops t
 [`Apply`](/docs/concepts/apply-and-commit) has not written them yet, so a leg on that player's key
 does not see them.
 
-That bites hardest on a player who just joined. Grant them something with `Apply`, list it for sale a
+This mostly affects a player who just joined. Grant them something with `Apply`, list it for sale a
 few seconds later, and the leg reads a key that has never been written, which folds to your `Default`.
-The reducer sees an empty inventory and a new player, refuses, and the whole transaction answers
+The reducer sees an empty inventory and a new player, refuses, and the whole transaction returns
 [`Refused`](/docs/concepts/reasons).
 
 ```luau
@@ -145,7 +148,7 @@ Store:Tx(`listing:{ListingId}`, {
 }):Wait()   --> false, Refused
 ```
 
-Two ways round it. Flush first if the session is on this server:
+There are two fixes. Flush first if the session is on this server:
 
 ```luau
 Session:Flush():Wait()
@@ -160,20 +163,20 @@ Session:Commit("GrantItem", { Item = ItemId }):Wait()
 Prefer `Commit` for anything a transaction will later depend on. A flush only works while the session
 is on the server running the transaction, and the seller may be on another one or offline.
 
-Waiting does not fix it. An autosave writes what was queued when it ran, so the newest applies are
-still unwritten whenever the transaction lands.
+Waiting does not fix it. An autosave writes only what was queued when it ran, so ops applied after it
+are still unsaved when the transaction runs.
 
 ### A live session does not know a leg wrote to it
 
-The record carries the change the moment `Tx` answers `true`. A session already open on that key does
+The record carries the change the moment `Tx` returns `true`. A session already open on that key does
 not. It holds its own copy and only picks an outside write up when it folds the record again.
 
 A session with nothing queued and nothing parked reads every two minutes, so a player who just bought
 something waits that long to see it arrive. Nothing is wrong and nothing is at risk. They are reading
 a copy that has not caught up.
 
-[`Store:Stale()`](/docs/reference/store#stale) carries the keys this server has changed. Subscribe
-once, and flush the session on every key it names:
+[`Store:Stale()`](/docs/reference/store#stale) is a stream of the keys this server has changed.
+Subscribe once, and flush the session on every key it names:
 
 ```luau
 Profiles:Stale():Subscribe(function(Key)
@@ -193,22 +196,24 @@ That re-reads the key, folds it again, and pushes anything the session still had
 fires [`Observe`](/docs/reference/session), so a UI bound to the session updates on its own.
 
 The stream names every key the transaction touched, so the buyer and the seller both refresh. It
-costs one request per key with a session here, and only on a purchase.
+costs one request for each changed key that has a session on this server, and nothing while no key
+changes.
 
 A cross store transaction pushes each leg onto its own store's stream, so subscribe on both stores.
 
-This listener yields, which the stale stream allows. The ones on `Session:Observe()` may not. See
-[Observer](/docs/reference/observer#listeners-that-may-yield).
+This listener yields, which the stale stream allows. Listeners on `Session:Observe()` may not yield.
+See [Observer](/docs/reference/observer#listeners-that-may-yield).
 
-A player on another server is not on this stream. Their server holds them, so their server does the
-flush, and the next section is how you ask it to.
+A player on another server is not on this stream. Their session is on that server, so that server
+has to flush it. The next section shows how to ask it to.
 
 ### Telling another server to refresh
 
 Ledger can't reach another server. Your game can, so send the key over `MessagingService` and let the
 server holding that player do the flush.
 
-Drive it from the same stream. Flush a key with a session here, and publish one without:
+Drive it from the same stream. If the key has a session on this server, flush it. Otherwise publish
+the key, so the server that has the session can flush it:
 
 ```luau
 local MessagingService = game:GetService("MessagingService")
@@ -244,27 +249,27 @@ Profiles:Stale():Subscribe(function(Key)
 end)
 ```
 
-The buyer sees the purchase in a moment either way. Without this they wait for the ordinary two
-minute read.
+With this, the buyer sees the purchase within a moment, whichever server they are on. Without it
+they wait for the ordinary two minute read.
 
-**Send the key and nothing else.** The other server re-reads the key itself, so the record stays the
-only thing either server believes. A message carrying the new inventory would be a second copy of the
-truth, and a dropped or repeated one would put the two servers out of step.
+**Send the key and nothing else.** The other server re-reads the key itself, so the stored record
+stays the only source of state. A message that carried the new inventory would be a second copy, and
+a dropped or repeated message would leave the two servers disagreeing.
 
-**Treat it as a nudge, not a guarantee.** `MessagingService` is best effort and rate limited, and
-`PublishAsync` throws once you hit a limit, which is why the call above is wrapped. A message that
-never arrives costs that player the ordinary two minute read. Nothing is lost either way, so there is
-no need to confirm delivery or retry.
+**Delivery is not guaranteed.** `MessagingService` is best effort and rate limited, and
+`PublishAsync` throws once you hit a limit, which is why the call above is wrapped. If a message
+never arrives, the player sees the change at the ordinary two minute read. Nothing is lost either
+way, so there is no need to confirm delivery or retry.
 
 Publishing only when the player isn't here keeps most purchases off the topic entirely.
 
-### What throws and what answers
+### Errors thrown and reasons returned
 
-The shape of a leg is your code, so getting it wrong throws where you wrote it. A key the target
-store won't take, a missing or oversized id, the wrong number of legs, the same key twice, a `Once`
-on a leg, a `Store` that Ledger didn't build.
+The shape of a leg is your code, so getting it wrong throws where you wrote it. Each of these throws:
+a key the target store won't take, a missing or oversized id, the wrong number of legs, the same key
+twice, a `Once` on a leg, and a `Store` that Ledger didn't build.
 
-What's *in* `Fields` is data, so it answers instead:
+A bad value inside `Fields` is data, not code, so `Tx` returns `Invalid` instead of throwing:
 
 ```luau
 local Ok, Why = Store:Tx(`trade:{TradeId}`, {
@@ -273,67 +278,85 @@ local Ok, Why = Store:Tx(`trade:{TradeId}`, {
 }):Wait()
 
 if Why == Ledger.Reason.Invalid then
-	-- a field can't be stored, so an Instance, a NaN from that multiply, a reserved name
+	-- a field can't be stored, for example an Instance, a NaN from that multiply, a reserved name
 end
 ```
 
-That's the same split `Edit` uses, and the same [`Invalid`](/docs/concepts/reasons). Nothing is
-prepared on any key when it happens, so there's nothing to clean up.
+`Edit` handles bad fields the same way, with the same [`Invalid`](/docs/concepts/reasons). Nothing
+is prepared on any key when it happens, so there's nothing to clean up.
 
 ## How it decides
 
 Each leg gets prepared on its key first. A prepared op is written into the log but carries a stamp
-that makes the fold skip it, so it's sitting there doing nothing.
+that makes the fold skip it, so it has no effect yet. A prepared leg is called parked until the
+transaction settles.
 
 Once every leg is prepared, Ledger writes the outcome to a marker key. That single write is the
 moment the transaction commits, and there's exactly one of them, so two servers racing the same
 transaction can't disagree about what happened.
 
-Committing takes the stamps off, which is what makes the ops start counting. Aborting removes them.
+Committing removes the stamps, so the fold starts including the ops. Aborting removes the ops.
 
-If any leg's reducer refuses during prepare, the whole thing aborts and every other leg gets its op
-pulled back out.
+If any leg's reducer refuses during prepare, the whole transaction aborts and Ledger removes the
+prepared op from every other leg.
 
-## Stuck legs
+## Parked legs
 
-If the server dies between preparing a leg and writing the outcome, that leg sits there stamped.
-Anything that reads the key sees a pending leg, so it can't just pretend it isn't there.
+If the server dies between preparing a leg and writing the outcome, that leg stays parked on its key.
+Anything that reads the key sees the parked leg.
 
 A few things clear it. Any read or write on that key tries to settle it first. The background
-sweeper picks up keys it knows have pending legs. And a transaction that's older than a minute is
-considered dead, so another server will abort it on its behalf.
+sweeper picks up keys it knows have parked legs. And once a transaction's marker has not changed for
+30 seconds per leg, a minute for two legs and two minutes for four, it counts as abandoned. The next
+server that reads it aborts it.
 
-While it's stuck, writes to that key answer [`Busy`](/docs/concepts/reasons), and `Edit` or `Reset`
-can answer `Unresolved` when the stuck leg would change the verdict. Neither means it failed. Both
-mean ask again in a moment.
+While a leg is parked, writes to that key return [`Busy`](/docs/concepts/reasons), and `Edit` or
+`Reset` can return `Unresolved` when the parked leg would change the verdict. Neither means it
+failed. Both mean ask again in a moment.
 
-Ask again yourself. `Tx` does not retry a `Busy` internally, because a key under contention is the
-last place to send more traffic:
+`Tx` does not retry `Busy` itself, because retrying at once adds load to a key that is already
+contended. Retry it yourself, with a delay that grows each time. The same id makes a retry safe, so
+`Unresolved` can be retried the same way:
 
 ```luau
-local Ok, Why
-for _ = 1, 6 do
-	Ok, Why = Store:Tx(`trade:{TradeId}`, Legs):Wait()
-	if Ok or Why ~= Ledger.Reason.Busy then
-		break
+local MAX_ATTEMPTS = 5
+local BASE_DELAY = 0.5 -- seconds
+
+local function TxWithRetry(Id: string, Legs: { Ledger.TxLeg }): (boolean, Ledger.Reason?)
+	local Ok, Why = Store:Tx(Id, Legs):Wait()
+	for Attempt = 1, MAX_ATTEMPTS - 1 do
+		if Ok or (Why ~= Ledger.Reason.Busy and Why ~= Ledger.Reason.Unresolved) then
+			break
+		end
+
+		-- the delay doubles each attempt, with jitter so servers that collided don't retry in step
+		task.wait(BASE_DELAY * 2 ^ (Attempt - 1) * (0.5 + math.random()))
+		Ok, Why = Store:Tx(Id, Legs):Wait()
 	end
-	task.wait(0.2 + math.random() * 0.3)
+	return Ok, Why
 end
+
+local Ok, Why = TxWithRetry(`trade:{TradeId}`, Legs)
 ```
 
-A key every player writes to is a throughput limit rather than a correctness one. See
+The waits add up to about 7.5 seconds. Another server's lease on the keys is released when its
+transaction finishes, usually well within that time, and lasts at most 10 seconds. A leg left by a
+crashed server is not aborted until its marker has been unchanged for 30 seconds per leg. If `Busy`
+comes back after the last attempt, tell the player to try again rather than retrying for longer.
+
+A key that every player writes to limits throughput, not correctness. See
 [One key at a time](/docs/limits#one-key-at-a-time).
 
-You can force a pass with `Ledger.Sweep()`.
+`Ledger.Sweep()` runs a sweeper pass immediately.
 
 ## Marker cleanup
 
-Committed markers get tidied up in the background once they're old enough that nothing could still
-be asking about them. That happens on the store named `<YourStore>_Tx`, which Ledger creates
-alongside yours.
+The sweeper deletes a committed marker about an hour after it last changed, and an aborted one after
+5 minutes. Markers are kept on the store named `<YourStore>_Tx`, which Ledger creates alongside
+yours.
 
-That's also why store names cap at 47 characters instead of the datastore's 50. Ledger needs the
-three for `_Tx`.
+That is why store names cap at 47 characters instead of the datastore's 50. Ledger needs the three
+characters for `_Tx`.
 
 ## Mixing stores
 
@@ -347,9 +370,10 @@ local Ok, Why = Players:Tx(`donate:{OrderId}`, {
 Both stores have to have been built by `Ledger.New` in this server. A leg naming something else
 throws.
 
-## When not to reach for it
+## When not to use it
 
-If you're moving one balance one direction, use a [transfer](/docs/guides/transfers). It's one
-protocol instead of two phases, it self heals, and it doesn't leave a key `Busy` while it runs.
+If you're moving one balance one direction, use a [transfer](/docs/guides/transfers). It costs 3
+requests where a two leg transaction costs 8, finishes on its own after a crash, and doesn't leave a
+key `Busy` while it runs.
 
 `Tx` is for when two different kinds of change have to happen together.

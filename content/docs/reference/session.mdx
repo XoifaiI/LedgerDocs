@@ -46,8 +46,8 @@ State.Bag.Items[1] = "sword"   --> attempt to modify a readonly table
 Session:Observe() -> Observer<S>
 ```
 
-Fires on every change that goes through, including ones from another server that turned up when a
-transfer or transaction settled. Doesn't fire for a refused op.
+Fires on every accepted change. That includes changes from another server that arrive when a
+transfer or transaction settles. Doesn't fire for a refused op.
 
 ```luau
 Session:Observe():Subscribe(function(State)
@@ -55,8 +55,8 @@ Session:Observe():Subscribe(function(State)
 end)
 ```
 
-This is the session's own stream, not a copy, so `Session:Observe() == Session:Observe()`. `Destroy`
-on it removes Ledger's own subscribers too, so don't call it. See
+This is the session's own stream, not a copy, so `Session:Observe() == Session:Observe()`. Don't
+call `Destroy` on it. That removes every subscriber, Ledger's own included. See
 [Observer](/docs/reference/observer) for the chain methods and cleanup.
 
 ### DidApply
@@ -69,10 +69,9 @@ Whether a [`Once`](/docs/concepts/once) name ever applied on this key. Reads liv
 doesn't yield.
 
 <Callout type="warn">
-  Live state includes the ops that wait for the next save. `Apply` puts a name in that queue, so
-  `DidApply` gives `true` before the op is written. It tells you that the name applied. It does not
-  tell you that the name is saved. To be sure that it is saved, use `Commit`, or use `Apply` and
-  then `Flush`.
+  Live state includes the ops that wait for the next save. After `Apply` queues an op with a
+  `Once` name, `DidApply` returns `true` before the op is saved. It tells you the name applied, not
+  that it is saved. To know it is saved, use `Commit`, or `Apply` and then `Flush`.
 </Callout>
 
 ## Writing
@@ -83,13 +82,13 @@ doesn't yield.
 Session:Apply(Kind: string, Fields: { [any]: any }?) -> (boolean, Reason?)
 ```
 
-Instant and local. Runs the reducer, updates state, tells observers, queues the op for the next save.
-Never touches the datastore.
+Instant and local. Runs the reducer, updates state, pushes to observers, and queues the op for the
+next save. Never touches the datastore.
 
 Use it for gameplay. See [Apply and Commit](/docs/concepts/apply-and-commit).
 
 On a session from a [typed store](/docs/concepts/typed-ops) the `Kind` and the `Fields` are checked
-against the ops you named. `Commit` and `CommitOp` take the same check.
+against the ops you named. `Commit` and `CommitOp` are checked the same way.
 
 ### Commit
 
@@ -97,10 +96,21 @@ against the ops you named. `Commit` and `CommitOp` take the same check.
 Session:Commit(Kind: string, Fields: { [any]: any }?) -> Future<boolean, Reason?>
 ```
 
-Pushes everything queued, appends the op, waits for the datastore, refolds, then answers. `true`
-means it's durable and every server will agree.
+Writes everything queued, appends the op, waits for the datastore, folds the record again, then
+returns. `true` means the op is applied and saved.
 
-Use it for anything you can't take back.
+If the log is full, `Commit` compacts it once and tries again. It returns `Full` if the log is still
+full.
+
+When a transaction is parked on the key, `Commit` waits up to 65 seconds for it to settle. If it is
+still parked and could change whether the op applies, `Commit` returns `Unresolved`. With two or
+more transactions parked it always does, because it cannot check every way they can settle.
+
+The op is already written, so don't call `Commit` again: that writes a second op with a new id.
+Read the key once the transaction settles, or use `CommitOp` with your own `Id`, which is safe to
+retry.
+
+Use it for any change you cannot undo.
 
 ### CommitOp
 
@@ -120,8 +130,15 @@ Session:CommitOp({
 }):Wait()
 ```
 
-`Id`, `Kind` and `OnceAt` belong to Ledger. Passing them in `Fields` through `Apply` or `Commit`
-warns and gets overwritten.
+`IdAt` is optional. It is the time you first sent an op whose `Id` you chose, in Unix seconds as
+`os.time()` returns it. Send the same value on every retry. A key keeps the ids of its last 2048
+compacted ops. If the key has dropped ids that were compacted after `IdAt`, it cannot tell whether
+your op applied. The commit then returns `Unresolved`, applies nothing and warns. An `IdAt` that is
+not a number returns `Invalid`. A time later than now counts as now.
+
+`Id`, `Kind` and `OnceAt` belong to Ledger. If you pass them in `Fields` to `Apply` or `Commit`,
+Ledger warns and overwrites them. `Apply` and `Commit` make a new id on every call, so Ledger warns
+and drops an `IdAt` passed to them.
 
 ## Saving
 
@@ -131,7 +148,7 @@ warns and gets overwritten.
 Session:Flush() -> Future<boolean, Reason?>
 ```
 
-Pushes queued ops without adding one. What autosave calls. `false` comes with a
+Writes queued ops without adding one. Autosave calls this. `false` comes with a
 [reason](/docs/concepts/reasons) and the ops stay queued for next time.
 
 ### Compact
@@ -140,8 +157,8 @@ Pushes queued ops without adding one. What autosave calls. `false` comes with a
 Session:Compact() -> Future<boolean, Reason?>
 ```
 
-Folds the log down into a fresh snapshot and drops the ops it absorbed. Autosave does this when the
-log gets long, so you rarely need it.
+Folds the logged ops into a new snapshot and removes the compacted ops from the log. Autosave does
+this when the log gets long, so you rarely need it.
 
 ### Release
 
@@ -149,9 +166,9 @@ log gets long, so you rarely need it.
 Session:Release() -> Future<boolean, Reason?>
 ```
 
-Marks the session closed and pushes what's left. `Apply`, `Commit` and `CommitOp` then answer
-[`Closed`](/docs/concepts/reasons). `Flush` still works, it adds no op.
+Marks the session closed and writes what is left. `Apply`, `Commit` and `CommitOp` then return
+[`Closed`](/docs/concepts/reasons). `Flush` still works, because it adds no op.
 
 Use `Store:Unload` instead. `Release` closes the session and tells the store nothing, so `IsLoaded`
-stays `true`, `Get` still hands back the closed session, and the autosave timer keeps running.
-`Unload` does both halves.
+stays `true`, `Get` still returns the closed session, and the autosave timer keeps running.
+`Unload` closes the session and also removes it from the store.

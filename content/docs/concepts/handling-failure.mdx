@@ -3,41 +3,47 @@ title: Handling failures
 description: When a retry is safe, and what to do about the reasons that need more than a retry.
 ---
 
-Most code only cares about two things: did it work, and can I ask again.
+Most code only cares about two things: did it work, and is it safe to retry.
 
 ```luau
 local Ok, Why = Store:Edit(UserId, "GrantItem", { Item = "Sword" }):Wait()
 
 if Ok then
-	-- it went through, and a retry under the same id would answer true again
+	-- it applied, and a retry under the same id would return true again
 elseif Why == Ledger.Reason.Unresolved or Why == Ledger.Reason.Busy then
-	-- no answer yet, ask again later with the same id
+	-- no result yet, retry later with the same id
 else
 	-- Refused, Spent, Closed, Backlog, Full, Invalid, Behind:
-	-- it didn't happen, and asking again with this id won't change that
+	-- it didn't apply, and a retry with this id won't change that
 end
 ```
 
-Reads answer the same way with the value in front:
+Reads return `(value?, Reason?)`, with the value first:
 
 ```luau
 local State, Why = Store:Peek(UserId):Wait()
 if State == nil then
-	-- Why says which of the failures it was
+	-- Why is the reason the read failed
 	return
 end
 ```
 
-A key nobody has ever written folds to your `Default`, so a read never gives you `nil` on success.
+A key nobody has ever written folds to your `Default`, so a read never returns `nil` on success.
 `nil` always means it failed.
 
 ## Why a retry is safe
 
 Every op carries an id, and an id applies at most once while the key remembers it. A key remembers
-an op while it is in the log, and for the next 2048 ops it absorbs. A retry that already went
-through answers `true` and moves nothing the second time. A [`Once`](/docs/concepts/once) name, a
-transfer id and a transaction id are remembered for 30 days instead. Use one of those for anything
-that may be retried later than the key remembers it.
+an op id while the op is in the log. After compaction, it keeps the ids of the newest 2048 compacted
+ops. A retry that already applied returns `true` and changes nothing the second time. A
+[`Once`](/docs/concepts/once) name, a transfer id and a transaction id are remembered for 30 days
+instead. Use one of those for anything that may be retried later than the key remembers it.
+
+An op you send with your own `Id`, through `EditOp`, `CommitOp` or `Confirm`, can also carry
+`IdAt`, the `os.time()` when you first sent the op. Send the same `IdAt` on every retry. When
+the key has dropped the ids from that time, the retry returns
+[`Unresolved`](/docs/concepts/reasons#unresolved) and applies nothing. Without `IdAt`, that retry
+applies a second time.
 
 The id has to be the same one. Build it before the call and keep it for the retry:
 
@@ -46,7 +52,7 @@ local OrderId = `order:{Receipt.PurchaseId}`
 
 local Ok, Why = Store:Edit(UserId, "Grant", { ProductId = 123, Once = OrderId }):Wait()
 if Why == Ledger.Reason.Unresolved then
-	-- same OrderId, so the retry costs nothing if the first one applied
+	-- same OrderId, so DidApply can tell whether the first call applied
 	Ok = Store:DidApply(UserId, OrderId):Wait() == true
 end
 ```
@@ -56,31 +62,31 @@ second time.
 
 ## Unresolved
 
-Ledger doesn't know whether the write applied. `Unresolved` does not mean no. Treat it as a refusal
-and you will eventually refuse something that already went through, which costs you money.
+Ledger doesn't know whether the write applied. `Unresolved` does not mean no. If you treat it as a
+refusal and send the change again under a new id, it can apply twice.
 
-**Retry with the same id.** See above. Without an id you have no way to ask again safely.
+**Retry with the same id.** See above. A retry under a new id is not safe.
 
-**Ask instead of guessing.** [`Store:DidApply(Key, Name)`](/docs/reference/store#didapply) says
-whether a `Once` name applied. Compare it against `true`, because a failed read gives `nil`.
+**Ask instead of guessing.** [`Store:DidApply(Key, Name)`](/docs/reference/store#didapply) returns
+whether a `Once` name applied. Compare it against `true`, because a failed read returns `nil`.
 
-**In `ProcessReceipt`, answer `NotProcessedYet`.** Roblox calls you again, and the next call gets a
-straight answer. The full pattern is in [Once](/docs/concepts/once#processreceipt).
+**In `ProcessReceipt`, return `NotProcessedYet`.** Roblox calls `ProcessReceipt` again, and the next
+call gets a definite result. The full pattern is in [Once](/docs/concepts/once#processreceipt).
 
-**For a stuck leg, [`Store:Resettle(Key)`](/docs/reference/store#resettle) settles it now** instead
+**For a parked leg, [`Store:Resettle(Key)`](/docs/reference/store#resettle) settles it now** instead
 of waiting for the sweep. `true` means the key has nothing unfinished on it.
 
 ## Spent
 
 Nothing was applied. `Spent` looks like success and it isn't.
 
-For a transfer the money is **back with the sender**. Hand out the item on a `Spent` and you have
-paid for something that was refunded.
+For a transfer the money is **back with the sender**. If you give out the item on `Spent`, the
+sender gets the item and keeps the money.
 
-`true` is the answer that means "already happened". Call `Transfer` again with an id that delivered,
-or `Tx` again with an id that committed, and you get `true` with nothing moved.
+`true` is the result that means "already happened". Call `Transfer` again with an id that delivered,
+or `Tx` again with an id that committed, and it returns `true` and moves nothing.
 
-So on `Spent`, decide what to do about a name you can't reuse. Read the keys, pick a new id, or tell
+So on `Spent`, decide what to do about an id you can't reuse. Read the keys, pick a new id, or tell
 the player it didn't go through. See [Ids and retries](/docs/guides/transfers#ids-and-retries) and
 [The id](/docs/guides/transactions#the-id).
 
@@ -95,15 +101,15 @@ nothing changes until the deploy finishes.
 </Callout>
 
 Pass [`OnLoadFailed`](/docs/reference/ledger#onloadfailed) if you deploy while people are playing. A
-rejoin puts them back on the same old server, so `Behind` wants a teleport. See
+rejoin puts the player back on a server with the old build, so handle `Behind` with a teleport. See
 [Rolling deploys](/docs/guides/migrations#rolling-deploys).
 
-## The rest
+## Other reasons
 
 | Reason | What to do |
 | --- | --- |
-| `Refused` | Your own rule said no. Tell the player. |
-| `Busy` | Retry in a few seconds. See [Stuck legs](/docs/guides/transactions#stuck-legs). |
+| `Refused` | Your reducer returned `nil`. Tell the player. |
+| `Busy` | Retry in a few seconds. See [Parked legs](/docs/guides/transactions#parked-legs). |
 | `Closed` | The session is gone. Write before `Unload`, see [Shutting down](/docs/guides/sessions#shutting-down). |
 | `Backlog` | Saves aren't going through. Stop writing and look at the datastore, see [Autosave](/docs/guides/sessions#autosave). |
 | `Full` | Remove something first, see [Size](/docs/limits#size). |

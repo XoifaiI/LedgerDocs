@@ -1,6 +1,6 @@
 ---
 title: Using Ledger from TypeScript
-description: The npm package for roblox-ts, and the handful of things the declaration does that you'd want to know about.
+description: The npm package for roblox-ts, and what its type declaration checks that Luau does not.
 ---
 
 Ledger is on npm as `@xoifail/ledger`. It's the same Luau you get from Wally with a declaration file
@@ -12,11 +12,11 @@ rest of these pages describe. Every type is there under `Ledger.`, with the name
 npm install @xoifail/ledger
 ```
 
-## Getting it into the place
+## Adding it to your project
 
 roblox-ts only syncs `node_modules/@rbxts` on its own. This package lives under `@xoifail`, so if
-you don't tell Rojo about that folder the require fails at runtime with a module it can't find. Add
-one line to `default.project.json`, next to the `@rbxts` one:
+you don't tell Rojo about that folder, the require fails at runtime because the module can't be
+found. Add one line to `default.project.json`, next to the `@rbxts` one:
 
 ```json
 "node_modules": {
@@ -26,7 +26,7 @@ one line to `default.project.json`, next to the `@rbxts` one:
 }
 ```
 
-Then import it in a server script. It still asserts it's on the server, same as in Luau.
+Then import it in a server script. As in Luau, it throws if a client requires it.
 
 ```ts
 import Ledger from "@xoifail/ledger";
@@ -34,9 +34,9 @@ import Ledger from "@xoifail/ledger";
 
 ## Calling it
 
-There's nothing to learn here. The declaration knows which methods take a self, so you write dot
-calls everywhere and the compiler puts the colon in where Ledger wants one. Futures still have
-`Wait`, and the `(boolean, Reason?)` every write answers with comes out as a pair you destructure:
+The declaration knows which methods take a self, so you write dot calls everywhere and the compiler
+turns them into colon calls where Ledger needs them. Futures still have `Wait`, and the
+`(boolean, Reason?)` every write returns is a tuple you destructure:
 
 ```ts
 const [ok, why] = session.Apply("SpendGold", { Amount: 25 });
@@ -44,10 +44,11 @@ const [state, readWhy] = store.Peek(userId).Wait();
 ```
 
 `Ledger.Reason` is both the type and the constants, so `why === Ledger.Reason.Busy` works the same
-way it does in Luau, and a `switch` over it can end in `never`.
+way it does in Luau. In a `switch` over it that handles every reason, the `default` case narrows to
+`never`.
 
 The one thing to decide is where the state type comes from. `Ledger.New` reads it off the reducer or
-off `Default`, whichever you've annotated. When both are inline, say it yourself:
+off `Default`, whichever you've annotated. When neither is annotated, pass the type explicitly:
 
 ```ts
 const Store = Ledger.New<Profile>({ Name: "PlayerData", Default: { Gold: 100 }, Reducer });
@@ -55,7 +56,7 @@ const Store = Ledger.New<Profile>({ Name: "PlayerData", Default: { Gold: 100 }, 
 
 ## Typed ops
 
-This is where the declaration earns its place. Name the ops as an interface and hand `NewTyped`
+Typed ops are where the declaration helps most. Name the ops as an interface and give `Ledger.New`
 both types:
 
 ```ts
@@ -70,7 +71,7 @@ interface Ops {
 	Prestige: {};
 }
 
-const Store = Ledger.NewTyped<Profile, Ops>({
+const Store = Ledger.New<Profile, Ops>({
 	Name: "PlayerData",
 	Default: { Gold: 100, Items: {} },
 	Reducer: (state, op) => {
@@ -85,29 +86,29 @@ const Store = Ledger.NewTyped<Profile, Ops>({
 ```
 
 `op.Kind === "Buy"` narrows `op` to that arm, so `op.Item` is a string in there and `op.Amount` is
-an error. Every write is held against the map, and the refusals are the ones the
+a type error. Every write is checked against the map, and the type errors are the ones the
 [typed ops](/docs/concepts/typed-ops) page lists:
 
 ```ts
 session.Apply("Buy", { Item: "Sword" });                 // fine
-session.Apply("Buy", { Item: "Sword", Once: "order1" }); // fine, Once rides along
+session.Apply("Buy", { Item: "Sword", Once: "order1" }); // fine, Once is allowed on any write
 session.Apply("Byu", { Item: "Sword" });                 // no kind by that name
 session.Apply("Buy", { Item: 42 });                      // Item is a string
 session.Apply("Buy", { Amount: 5 });                     // those are AddGold's fields
 store.Reserve(userId, "Items", 1, "order1");             // Items isn't a number field
 ```
 
-There's one check the Luau side doesn't have. A kind that doesn't name its fields as an object,
-`Buy: string`, stops the build at `NewTyped` rather than being ignored.
+There's one check the Luau side doesn't have. If a kind's fields are not an object type, for example
+`Buy: string`, the build fails at `Ledger.New`. Luau ignores it.
 
-On a store built with `New`, the op's fields all read as `unknown`, so narrow them with `typeIs`
-the way the Luau examples use `type()`.
+On a store built without an `Ops` type, the op's fields all read as `unknown`, so narrow them with
+`typeIs` the way the Luau examples use `type()`.
 
 ## Frozen state
 
-The state your reducer is handed is frozen at runtime. `Ledger.Frozen` says so in the type, at every
-depth, arrays and maps included. Annotate the state with it and a write that would throw while you
-play stops the build instead:
+The state your reducer is given is frozen at runtime. `Ledger.Frozen` marks it read only in the type,
+at every depth, arrays and maps included. Annotate the state with it, and a write that would throw at
+runtime is a type error instead:
 
 ```ts
 Reducer: (state: Ledger.Frozen<Profile>, op) => {
@@ -118,8 +119,8 @@ Reducer: (state: Ledger.Frozen<Profile>, op) => {
 
 ## The fields you can't pass
 
-`Id`, `Kind` and `OnceAt` belong to Ledger. In Luau, passing one in `Fields` warns and gets
-overwritten. In TypeScript it doesn't build. `Once` is the one that's yours, and it's allowed on
+`Id`, `Kind` and `OnceAt` are reserved by Ledger. In Luau, passing one in `Fields` warns and gets
+overwritten. In TypeScript it is a type error. `Once` is the one you may pass, and it's allowed on
 every write, typed or not.
 
 ## Migrations
@@ -141,20 +142,20 @@ Migrations: [
 
 ## Waiting with a timeout
 
-`Wait()` gives you the values. `Wait(seconds)` can give you nothing at all, so in that overload
-every value in the pair is optional and the checker makes you deal with it. The
-[Future](/docs/reference/future) page says why you don't want a timeout on a write anyway.
+`Wait()` returns the values. `Wait(seconds)` returns nothing if it times out, so in that overload
+every value in the pair is optional and the type checker makes you handle `undefined`. The
+[Future](/docs/reference/future) page explains why you don't want a timeout on a write anyway.
 
-## Two names
+## `Ledger.Record` and `Ledger.OpMap`
 
-`Ledger.Record<D>` is what `Inspect` hands back, the same as in Luau. It shadows TypeScript's own
-`Record` inside the `Ledger` namespace, which nothing in there needs.
+`Ledger.Record<D>` is what `Inspect` returns, the same as in Luau. Inside the `Ledger` namespace it
+hides TypeScript's built in `Record`, which Ledger's declaration does not use.
 
-`Ledger.OpMap` is what every op map is held against. You never write it yourself. If you're seeing it
-in an error, one of your kinds isn't naming its fields as an object.
+`Ledger.OpMap` is the type every op map is checked against. You never write it yourself. If you see
+it in an error, one of your kinds isn't naming its fields as an object.
 
 ## What isn't checked
 
-Which methods a store takes still depends on `Keys`, and that's not in the type. `Load`, `Get` and
-the other player methods throw at the call on a string keyed store, and `Bump` and `Total` throw on a
-player one, exactly as they do in Luau.
+Which methods a store accepts still depends on its `Keys` option, and that's not in the type.
+`Load`, `Get` and the other player methods throw at the call on a string keyed store, and `Bump` and
+`Total` throw on a player one, exactly as they do in Luau.

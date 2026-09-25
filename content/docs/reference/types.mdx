@@ -3,7 +3,7 @@ title: Types
 description: What Ledger exports for strict mode.
 ---
 
-Everything here is exported off the top level module, so `Ledger.Op`, `Ledger.Store` and so on.
+Everything here is exported from the top level module, as `Ledger.Op`, `Ledger.Store` and so on.
 
 ## Op
 
@@ -21,14 +21,11 @@ One change. `Id` and `Kind` are Ledger's, everything else is yours.
 as one of the kinds you named, so testing `Op.Kind` narrows to that kind and its fields come out
 typed. See [Typed ops](/docs/concepts/typed-ops).
 
-`Id`, `Kind` and `OnceAt` are reserved. Passing any of them in `Fields` warns and gets overwritten.
+`Id`, `Kind` and `OnceAt` are reserved. If you pass any of them in `Fields`, Ledger warns and
+overwrites them.
 
 `Once` is yours to set, and it's what makes the op apply at most one time on that key. See
 [Once](/docs/concepts/once).
-
-Every method that can fail answers `(value?, Reason?)` or `(boolean, Reason?)`. Nothing in Ledger
-throws into a Future, so `Wait` never comes back empty on you. See
-[Reasons](/docs/concepts/reasons).
 
 ## OpOf
 
@@ -36,14 +33,17 @@ throws into a Future, so `Wait` never comes back empty on you. See
 type OpOf<O, K> = { Id: string, Kind: K } & index<O, K>
 ```
 
-One kind out of your op map, for a reducer that gives each kind its own function. See [with named
-ops](/docs/concepts/advanced-reducers#with-named-ops).
+The op type for one kind in your op map. Use it to type a function that handles a single kind.
 
 ```luau
 local function SpendGold(State: Profile, Op: Ledger.OpOf<Ops, "SpendGold">): Profile?
-	return SetPath(State, { "Gold" }, State.Gold - Op.Amount)
+	local Next = table.clone(State)
+	Next.Gold -= Op.Amount
+	return Next
 end
 ```
+
+For a table of handlers, one per kind, see [Advanced reducers](/docs/concepts/advanced-reducers#one-handler-per-op-kind).
 
 ## Reducer
 
@@ -59,8 +59,9 @@ See [Writing a reducer](/docs/concepts/reducer).
 type Frozen<S>
 ```
 
-Your state with every field read only, at every depth. It's how the state you are handed is at
-runtime. Annotate a reducer's state with it and a write into a nested table stops the build:
+Your state with every field read only, at every depth. At runtime, the state Ledger passes you is
+already frozen this way. Annotate a reducer's state with it, and a write into a nested table is a
+type error:
 
 ```luau
 type Hero = { Gold: number, Stats: { Level: number } }
@@ -73,7 +74,7 @@ end,
 ```
 
 An array or a map stays writable in the type, and so does what it holds, because Luau can't make an
-indexer read only yet. A write into one still throws while you play. In TypeScript `Ledger.Frozen`
+indexer read only yet. A write into one still throws at runtime. In TypeScript `Ledger.Frozen`
 covers arrays and maps as well.
 
 ## Reason
@@ -84,8 +85,10 @@ type Reason =
 	| "Backlog" | "Full" | "Invalid" | "Behind" | "Held"
 ```
 
-Compare against `Ledger.Reason.Refused` and friends rather than the literals. See
-[Reasons](/docs/concepts/reasons).
+Compare against the `Ledger.Reason` constants, such as `Ledger.Reason.Refused`, not the string
+literals. See [Reasons](/docs/concepts/reasons).
+
+Every method that can fail returns `(value?, Reason?)` or `(boolean, Reason?)`.
 
 ## KeyLike
 
@@ -93,8 +96,8 @@ Compare against `Ledger.Reason.Refused` and friends rather than the literals. Se
 type KeyLike = number | string
 ```
 
-A UserId on a player store, a key string on an entity store. Ledger checks which one the store wants
-and throws with what it expected.
+A UserId on a player store, a key string on a string keyed store. If the key does not fit the store,
+Ledger throws, and the error message names what the store expects.
 
 ## KeysMode
 
@@ -116,14 +119,14 @@ type Config<D> = {
 }
 ```
 
-What `Ledger.New` takes. See [Ledger.New](/docs/reference/ledger#ledgernew).
+The options of a store that takes any op. See [Ledger.New](/docs/reference/ledger#ledgernew).
 
 ## TypedConfig
 
 ```luau
 type TypedConfig<D, O> = {
 	read Name: string,
-	read Reducer: (State: D, Op: Op<O>) -> (D | Frozen<D>)?,
+	read Reducer: (State: D, Op: Op<O>) -> unknown,
 	read Default: D,
 	read Balance: string?,
 	read Migrations: { Migration }?,
@@ -132,9 +135,8 @@ type TypedConfig<D, O> = {
 }
 ```
 
-What `Ledger.NewTyped` takes. The reducer gets the op as one of the kinds you named, and it has to
-give back your state or `nil`. That state can be typed [`Frozen`](#frozen). See
-[Typed ops](/docs/concepts/typed-ops).
+What `Ledger.New` takes. The reducer gets the op as one of the kinds you named. Annotate its return
+as your state or `nil` to have that checked. See [Typed ops](/docs/concepts/typed-ops).
 
 ## TypedStore and TypedSession
 
@@ -143,9 +145,9 @@ type TypedStore<D, O>
 type TypedSession<S, O>
 ```
 
-What `Ledger.NewTyped` hands back, and what `Store:Expect` gives you on one. They carry the same
-methods as `Store<D>` and `Session<S>`, with `Apply`, `Commit` and `Edit` checked against the ops you
-named.
+`TypedStore` is what `Ledger.New<<Profile, Ops>>` returns. `TypedSession` is what `Store:Expect`
+returns on a typed store. They have the same methods as `Store<D>` and `Session<S>`, with `Apply`,
+`Commit` and `Edit` checked against the ops you named.
 
 ```luau
 local function Buy(Session: Ledger.TypedSession<Profile, Ops>, Item: string)
@@ -181,11 +183,19 @@ type Record<D> = {
 	Floor: number?,
 	Envelope: number?,
 	Erased: number?,
+	Removing: number?,
+	Horizon: number?,
+	Absorbed: { { At: number, Count: number } }?,
 }
 ```
 
-What [`Store:Inspect`](/docs/reference/store) hands back. It's a frozen copy, so nothing you do to it
-reaches what the server folds from.
+What [`Store:Inspect`](/docs/reference/store#inspect) returns. It is a frozen copy. To change the
+key, use `Edit`, `Reset` or `Erase`.
+
+`Erased` is when the key was last erased. `Removing` is set while a second erase removes the key.
+`Horizon` is the time of the newest compaction whose ids the key has dropped, or of the last erase.
+An op whose `IdAt` is earlier than `Horizon` is not written. `Absorbed` counts how many ids each
+compaction added to `Seen`, and when.
 
 ## Migration
 
@@ -234,12 +244,12 @@ type HistoryEntry = {
 }
 ```
 
-`At` is Unix seconds. `Version` is what you hand to `PeekVersion`.
+`At` is Unix seconds. `Version` is what you give to `PeekVersion`.
 
 ## Future
 
-What every method that touches the datastore hands back. The work starts at the call, `:Wait()`
-parks your thread until it's done.
+What every method that touches the datastore returns. The work starts at the call. `:Wait()`
+yields your thread until the work finishes.
 
 ```luau
 local Job = Store:Peek(UserId)
@@ -247,13 +257,16 @@ DoSomethingElse()
 local State = Job:Wait()
 ```
 
-See [Future](/docs/reference/future) for timeouts, error handling, and why a failed read gives you
+Ledger methods return a reason instead of throwing inside the Future, so `Wait` returns values. The
+exception is a `Wait` with a timeout that runs out. It returns no values.
+
+See [Future](/docs/reference/future) for timeouts, error handling, and why a failed read returns
 `nil`.
 
 ## Observer
 
-What `Session:Observe()` and `Store:Stale()` hand back. Subscribe for every change that goes
-through, and chain with `Map`, `Filter` and `Changed`.
+What `Session:Observe()`, `Store:Stale()` and `Store:Follow()` return. Subscribe to get every
+accepted change, and chain with `Map`, `Filter`, `Changed` and `Use`.
 
 ```luau
 Session:Observe():Subscribe(function(State)
@@ -265,7 +278,7 @@ See [Observer](/docs/reference/observer).
 
 ## Typing your own state
 
-Write the state type yourself and let the store carry it:
+Write the state type and the ops yourself and give both to `New`:
 
 ```luau
 export type Profile = {
@@ -273,17 +286,23 @@ export type Profile = {
 	Items: { string },
 }
 
-local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+export type Ops = {
+	AddGold: { Amount: number },
+	PickUp: { Item: string },
+}
+
+local function Reducer(State: Profile, Op: Ledger.Op<Ops>): Profile?
 	-- ...
 end
 
-local Store: Ledger.Store<Profile> = Ledger.New({
+local Store: Ledger.TypedStore<Profile, Ops> = Ledger.New<<Profile, Ops>>({
 	Name = "PlayerData",
-	Default = { Gold = 100, Items = {} } :: Profile,
+	Default = { Gold = 100, Items = {} },
 	Reducer = Reducer,
 })
 ```
 
-`Session:Get()` then gives you a `Profile`, and the reserved fields stay out of your type. They're
-there at runtime, your reducer passes them through with `table.clone`, and you don't have to declare
-them.
+A store built without `Ops` is annotated `Ledger.Store<Profile>`.
+
+`Session:Get()` then returns a `Profile`, and the reserved fields stay out of your type. They exist
+at runtime, and `table.clone` in your reducer copies them. You don't have to declare them.

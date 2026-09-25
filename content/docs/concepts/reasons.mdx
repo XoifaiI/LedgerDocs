@@ -1,9 +1,9 @@
 ---
 title: Reasons
-description: The ten answers Ledger gives when something doesn't go through.
+description: The ten reasons Ledger returns when something doesn't go through.
 ---
 
-Anything that can fail tells you why. Writes answer `(boolean, Reason?)` and reads answer
+Anything that can fail tells you why. Writes return `(boolean, Reason?)` and reads return
 `(value?, Reason?)`, and there are only ten reasons. They live on `Ledger.Reason`, so you can
 compare against the constant instead of a string literal.
 
@@ -19,11 +19,11 @@ do about them.
 
 ## Refused
 
-Your reducer returned `nil`. The op was legal to write, it just wasn't allowed to happen, so the
-player couldn't afford it, or already owns it, or whatever your rule was. This is the only reason
-that came from your own code, and it's the only one that's a normal part of gameplay.
+Your reducer returned `nil`. The op was valid, but your rule rejected it, for example because the
+player couldn't afford it or already owns it. This is the only reason that came from your own code,
+and it's the only one that's a normal part of gameplay.
 
-Nothing changed. Don't retry it, the answer won't be different.
+Nothing changed. Don't retry it, the result won't be different.
 
 ## Busy
 
@@ -31,33 +31,35 @@ Someone else is in the middle of a transaction on that key and it hasn't finishe
 changed.
 
 Ledger puts the key on the [recovery sweep](/docs/guides/recovery#sweeping), which runs every 60
-seconds. Your own retry usually gets there first, because every read and write settles what it finds
-pending on the key before doing anything else. Retry in a few seconds.
+seconds. Your own retry usually settles it sooner, because every read and write settles what it
+finds pending on the key before doing anything else. Retry in a few seconds.
 
-`Session:Apply` also answers this when the key has hit its 1.5 MB op cap and a parked transaction is
+`Session:Apply` also returns this when the key has hit its 1.5 MB op cap and a parked transaction is
 stopping it compacting. The datastore is fine. Retry once the transaction settles.
 
-`Tx` does not retry a `Busy` for you. Every server retrying at once would pile more load onto a key
-that is already contended, so the backoff is yours to write. See
+A write to a key also returns `Busy` while a second `Erase` takes that key off the datastore. This
+lasts at most two minutes. See [Erase](/docs/guides/recovery#erase).
+
+`Tx` does not retry a `Busy` for you. Every server retrying at once would add more load to a key
+that is already contended, so your own code has to retry, with a longer wait each time. See
 [One key at a time](/docs/limits#one-key-at-a-time).
 
 ## Spent
 
-That name is used up and nothing was applied.
+That id is used up and nothing was applied.
 
-For a transfer it means the money went **back to the sender**. The hold sat there long enough to
-expire and Ledger refunded it. The id is kept afterwards so a late retry can't pay out against a
-refund that already happened.
+For a transfer it means the money went **back to the sender**. The money stayed set aside until the
+transfer expired, and Ledger refunded it. Ledger keeps the id afterwards, so a late retry with that
+id cannot send the money again.
 
-For a transaction it means the name can't be used for what you asked. Either that name already ran for
+For a transaction it means the id can't be used for what you asked. Either that id already ran for
 a different set of keys or a different amount, or an earlier attempt was cancelled part way. Ledger
-would rather refuse than half apply it. A transfer answers `Spent` for the same reason, so asking
-again under a name that already went through, for a different amount or a different key, gets `Spent`
-instead of `true`.
+refuses it instead of applying part of it. A transfer does the same: a retry under an id that
+already applied, for a different amount or a different key, returns `Spent` instead of `true`.
 
-`Spent` says this attempt changed nothing. It does not promise the name can never work again. A name
-whose transaction was cancelled before any leg applied is free to use, and that is what lets a retry
-finish a cancelled attempt. A name that already moved money is done.
+`Spent` means this attempt changed nothing. It does not mean the id can never work again. An id
+whose transaction was cancelled before any leg applied is free to use, so a retry can finish a
+cancelled attempt. An id that already moved money cannot be used again.
 
 <Callout type="warn">
   `Spent` is not success. Nothing moved, and for a transfer the money is back where it started. See
@@ -66,59 +68,70 @@ finish a cancelled attempt. A name that already moved money is done.
 
 ## Held
 
-A transfer took the money and could not hand it over, because the receiving key was erased. This is
+A transfer took the money and could not deliver it, because the receiving key was erased. This is
 not "nothing happened". The amount has left the sender and is set aside with them.
 
-Ledger gives it back on its own, and recovery follows that key until it does. Tell the sender their
-money is coming back rather than that the transfer failed. Don't send it again under a new name, or
-they pay twice.
+Ledger gives it back on its own, and the recovery sweep keeps checking that key until it has. Tell
+the sender their money is coming back rather than that the transfer failed. Don't send it again
+under a new id, or they pay twice.
 
-A [reservation](/docs/guides/reservations) never answers it. A hold lives in MemoryStore and takes
-nothing off the key, so there is nothing to be set aside.
+A [reservation](/docs/guides/reservations) never returns `Held`. A hold lives in MemoryStore and
+takes nothing off the key, so there is nothing to be set aside.
 
 ## Unresolved
 
 Ledger doesn't know. Either the datastore call failed in a way that might still have written, or a
 transaction leg is parked on the key and the fold can change once it settles.
 
-`Session:Apply` answers this when a transaction is parked and your op only holds if that transaction
-does not go through. Ledger folds both futures and only answers when they agree. Ask again once the
-transaction settles.
+`Session:Apply` returns this when a transaction is parked on the key and your reducer accepts the op
+only if that transaction commits, or only if it does not. Ledger folds the state both ways, and
+accepts the op only when both results agree. Retry once the transaction settles.
+
+`Session:Commit` and `Store:Edit` return this when the op was written but a transaction still parked
+on the key could change whether it applies. With two or more transactions parked, they always
+return it. Read the key once the transactions settle.
+
+A retry of an op with your own `Id` returns this when its `IdAt` is older than the ids the key still
+keeps. The key may have applied that id and then dropped it, so nothing is applied. Read the key
+before you send the op again. See
+[Why a retry is safe](/docs/concepts/handling-failure#why-a-retry-is-safe).
 
 `Unresolved` does not mean no, and it is the one that costs money if you treat it as a refusal. See
 [Unresolved](/docs/concepts/handling-failure#unresolved).
 
 ## Closed
 
-The session is gone. The player left and it was released, or the store was destroyed. Anything you
-write to it now goes nowhere.
+The session is gone. The player left and the session was released, or the store was destroyed.
+Anything you write to it now is lost.
 
 ## Backlog
 
 Ops are piling up because saves aren't going through. Either 4096 ops are queued or they've hit the
-1.5 MB cap on unsaved bytes. This basically only happens when the datastore is down.
+1.5 MB cap on unsaved bytes. This usually only happens when the datastore is down.
 
-Nothing changed. This is a signal to stop writing and look at what's wrong, not to retry harder.
+Nothing changed. This is a signal to stop writing and look at what's wrong, not to retry more often.
 
 ## Full
 
-The profile is at the 2 MB cap and the op would make it bigger. Ledger lets ops through that shrink
-it, so a cleanup still works.
+The profile is at the 2 MB cap and the op would make it bigger. Ledger still accepts ops that make
+it smaller, so a cleanup still works.
 
-`Store:Edit` answers this when the key already carries 1.5 MB of ops that have not been compacted
-away. That happens when a parked transaction is stopping the key compacting. It clears once the
+`Store:Edit` returns this when the key already carries 1.5 MB of ops that have not been compacted.
+That happens when a parked transaction is stopping the key compacting. It clears once the
 transaction settles.
+
+`Store:Edit` and `Session:Commit` compact a full log once and try again before they return `Full`.
 
 Nothing changed. You need to remove something before you can add anything.
 
 ## Invalid
 
-The op can't be stored. Something in the fields isn't JSON, so an Instance, a function, a cyclic
-table, a table mixing array and dictionary keys, NaN, inf. Or the fields use a name Ledger reserves,
-or the kind starts with `__`. Or your reducer handed back something that wasn't a table.
+The op can't be stored. Something in the fields isn't JSON, such as an Instance, a function, a
+cyclic table, a table mixing array and dictionary keys, NaN or inf. Or the fields use a name Ledger
+reserves, or the kind starts with `__`. Or your reducer returned something that wasn't a table.
 
-`Edit`, `Apply`, `Commit` and `Tx` all answer this the same way, and for `Tx` it means one of the
-legs, so nothing was prepared on any key.
+`Edit`, `Apply`, `Commit` and `Tx` all return this the same way. For `Tx` it means one of the legs
+is invalid, and nothing was prepared on any key.
 
 Nothing changed. This is a bug in the calling code, and Ledger warns with the specific field.
 
@@ -127,8 +140,8 @@ Nothing changed. This is a bug in the calling code, and Ledger warns with the sp
 A newer server wrote that record and this one can't read it. Either the stored format is newer than
 this server's build, or the record needs a migration this build doesn't have.
 
-Nothing changed, and retrying is pointless. `Behind` describes which version of your game this server
-is running, so nothing about the datastore will change it. It clears when the deploy finishes and
+Nothing changed, and retrying is pointless. `Behind` is caused by the version of your game this
+server is running, not by the datastore. It clears when the deploy finishes and
 every server is on the same build.
 
 You'll only see it during a rolling deploy, and only on records a newer server already touched. If

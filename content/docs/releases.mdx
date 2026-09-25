@@ -5,6 +5,37 @@ description: What changed, and what you have to change with it.
 
 `+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
 
+## 6.1.0
+
+There is now one `Ledger.New`. Give it your state and op types for a typed store, or call it plain
+for a store that takes any op. This release also closes a few ways a retry or a race could give the
+wrong result.
+
+```diff
++ Ledger.New<<Profile, Ops>>(Options) builds a typed store. Ledger.New(Options) still builds an open one
+- Ledger.NewTyped. Use Ledger.New<<Profile, Ops>> instead
++ EditOp, CommitOp and Confirm take IdAt, the time you first sent an op with your own Id. A retry that arrives after the key has dropped that id returns Unresolved instead of applying again
++ Session:Commit compacts a full log once and tries again before it returns Full
++ Session:Commit returns Unresolved when a parked transaction could still change whether its op applies, instead of true
++ A write that arrives while a second Erase removes the key returns Busy
+
+! Ledger.NewTyped is gone. Rename each call to Ledger.New, with the same type arguments and options
+! Session:Commit can return Unresolved while a transaction is parked on the key. Don't call Commit again, read the key once it settles
+```
+
+### Upgrading
+
+Rename `Ledger.NewTyped` to `Ledger.New`. The arguments are the same, so nothing else changes. In
+TypeScript, `Ledger.NewTyped<Profile, Ops>(...)` becomes `Ledger.New<Profile, Ops>(...)`.
+
+Your data needs no migration, and 6.1 and 6.0 servers can run side by side. Until the deploy
+finishes, a 6.0 server ignores `IdAt` and the mark a second `Erase` leaves, and when it compacts a
+key it drops the record of which ids that key has forgotten. A 6.1 server starts that record again at
+its next compaction of the key, so finish the deploy before you rely on `IdAt`.
+
+If you retry `EditOp`, `CommitOp` or `Confirm` with your own `Id`, send `IdAt` with it. See
+[Why a retry is safe](/docs/concepts/handling-failure#why-a-retry-is-safe).
+
 ## 6.0.1
 
 A small release. `Default` now only reaches new players, and cleaning up after transactions costs
@@ -49,12 +80,12 @@ a busy shared key gets a lot cheaper.
 + Warnings show their full message instead of a table address
 + Warnings no longer blame an erase or the datastore when another server simply wrote first
 + A transaction the reaper is already cleaning up cannot be committed late
-+ What Peek with a MaxAge and Follow hand you is frozen, like every other read
++ What Peek with a MaxAge and Follow give you is frozen, like every other read
 + A server keeps at most 256 copies of keys that nobody follows
 
 ! 6.0 writes records in a new format that 5.x cannot read. Do not run the two side by side
 ! Erase can answer Busy now. It means money on the key is still being sent. Try again later
-! What Peek with a MaxAge and Follow hand you is frozen. Clone it before you change it
+! What Peek with a MaxAge and Follow give you is frozen. Clone it before you change it
 ```
 
 ### Upgrading

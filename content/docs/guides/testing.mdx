@@ -1,14 +1,15 @@
 ---
 title: Testing
-description: The mock datastore, the swappable clock, and how Ledger itself is tested.
+description: Run a store on an in memory datastore, size it like a real server, and write tests against it.
 ---
 
-## The mock
+## The mock datastore
 
-`Mock = true` puts a store on an in memory datastore. No API access, no published place, no network.
+`Mock = true` runs a store on an in memory datastore instead of `DataStoreService`. It needs no API
+access, no published place and no network. Nothing it saves outlives the server.
 
 ```luau
-local Store = Ledger.New({
+local Store = Ledger.New<<Profile, Ops>>({
 	Name = "Test",
 	Default = { Gold = 0 },
 	Reducer = Reducer,
@@ -16,56 +17,63 @@ local Store = Ledger.New({
 })
 ```
 
+The mock enforces the same limits as the real datastore:
+
+- Names and keys up to 50 characters, and values up to 4 MB as JSON. Only values JSON can hold.
+- The request budget for this server and for the whole experience, refilled over a minute, with a
+  queue of 30 requests behind each.
+- The throughput cap on each key: 25 MB read and 4 MB written per minute.
+- Versions kept for 30 days, and key listings in pages.
+
+It is stricter than Studio. Studio gives a server a larger request budget than a live server gets,
+so code that fits in Studio can run out of budget live. The mock uses the live budgets.
+
+It does not model the 4 second read cache, a read that is a few seconds behind another server's
+write, or throttling inside Roblox's backend.
+
 ### Sizing it
 
-Pass a table instead of `true` to say what size of server to pretend to be.
+Pass a table instead of `true` to set the size of server the mock acts as:
 
-`Players` is how many players to size the request budget for, since Roblox's budget formula is a base
-plus a per player allowance. Set it to what a real server of yours looks like.
+| Option | Default | What it sets |
+| --- | --- | --- |
+| `Players` | `0` | Players on this server. Sizes this server's request budget. |
+| `CCU` | `Players` | Players in the whole experience. Sizes the experience's request budget. |
+| `Throttled` | `true` | Whether the budgets and caps are enforced. |
 
-There are two budgets. One is for this server and one is for the whole experience. `Players` sizes the
-first, `CCU` sizes the second, and `CCU` defaults to `Players`. The smaller one stops you first:
+A request has to fit both budgets, so the smaller one is the limit:
 
 ```luau
-Mock = { Players = 30 }                --> 900 writes, 1260 reads, 65 lists
-Mock = { Players = 30, CCU = 10000 }   --> 1260 writes, 1260 reads, 65 lists
+Mock = { Players = 30 }              --> 900 writes, 1260 reads, 65 lists a minute
+Mock = { Players = 30, CCU = 10000 } --> 1260 writes, 1260 reads, 65 lists a minute
 ```
 
-Leave `CCU` alone to test against the tighter of the two. Raise it to see what a server does once the
-experience budget is no longer the limit.
+With `CCU` left at its default, the experience budget is the tighter limit on writes. Raise `CCU` to
+test a server where only its own budget limits it.
 
-`Throttled` defaults to true and is what makes the mock worth using. With it on you get real request
-budgets, real refill rates, real queueing, and a real throughput cap per key. Turn it off with
-`Throttled = false` when you're testing logic and don't want to wait around.
+Set `Throttled = false` to test logic without waiting on budgets. Leave it on to test how your code
+behaves under live limits.
 
-The fake datastore is sized once. The first store built with `Mock` sets it, and a later one asking for
-a different size throws where it was written. A plain `Mock = true` joins whatever is already there.
+Every store built with `Mock` shares one fake datastore, and the first one sets its size. A later
+store that asks for a different size throws. `Mock = true` uses the size that is already set.
 
-<Callout type="warn">
-  The mock is stricter than Studio on purpose. Studio hands you request budgets a live server never
-  gets, so code that's fine in Studio can fall over the moment it's on a real server with 40 people
-  in it. If it passes against the mock it'll pass live.
-</Callout>
+## Checks that only run in Studio
 
-What the mock keeps from the real thing: the 50 character name and key limits, the 4 MB value limit,
-30 versions of history, JSON only values, and paged listing.
+In Studio, Ledger checks two things each time a session saves:
 
-## Studio checks
+- It replays the log and compares the result with the live state. A difference means your reducer
+  is not deterministic, and the warning names the field that differs.
+- It checks that the state can be stored, and names the field that can't.
 
-Some checks only run in Studio, because they cost too much to run live.
+Both cost too much to run on a live server, so a live server gives no warning. Fix what they report
+in Studio.
 
-Ledger refolds the log after every commit and compares it against live state. If they don't match,
-your reducer isn't deterministic, and the warning names the field that moved.
+## Writing a test
 
-That is a bug to fix. The check only runs in Studio, so on a live server you get no warning and the
-same broken behaviour.
-
-## Writing tests
-
-The pattern that works is: build the store on the mock, drive it, assert on `Peek`.
+Build the store on the mock, write to it, then check the result with `Peek`:
 
 ```luau
-local Store = Ledger.New({
+local Store = Ledger.New<<Profile, Ops>>({
 	Name = "Test",
 	Default = { Gold = 100 },
 	Reducer = Reducer,
@@ -74,10 +82,15 @@ local Store = Ledger.New({
 })
 
 Store:Edit(1, "SpendGold", { Amount = 30 }):Wait()
-assert(Store:Peek(1):Wait().Gold == 70)
+
+local State = Store:Peek(1):Wait()
+assert(State ~= nil and State.Gold == 70)
 
 Store:Destroy()
 ```
 
-`Store:Destroy()` frees the name, so the next test can build a store called `Test` again. Without it
-you'll get a name clash.
+Call `Store:Destroy()` at the end of each test. It frees the store's name, so the next test can
+build a store with the same name. Building two live stores with one name throws.
+
+The fake datastore keeps its data for as long as the server runs, and `Destroy` does not clear it.
+A later test that reads the same key sees what an earlier test wrote. Give each test its own keys.

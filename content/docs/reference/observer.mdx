@@ -1,6 +1,6 @@
 ---
 title: Observer
-description: What Session:Observe gives you back.
+description: The stream that Session:Observe, Store:Stale and Store:Follow return.
 ---
 
 ```luau
@@ -9,12 +9,13 @@ Session:Observe():Subscribe(function(State)
 end)
 ```
 
-An observer is a stream of values you can subscribe to. Ledger pushes the new state onto one every
-time a change goes through, and it hands you that same stream from `Session:Observe()`.
+An observer is a stream of values you can subscribe to. Ledger has three:
 
-`Store:Stale()` is the second stream Ledger gives you. It carries the keys this server changed, not
-a state table. `Store:Follow()` is the third stream. It carries the state on one key that every
-server reads. Everything on this page works on all three.
+- `Session:Observe()` pushes the session's new state after every accepted change.
+- `Store:Stale()` pushes the keys this server changed, not a state table.
+- `Store:Follow()` pushes the state on one key that every server reads.
+
+Everything on this page works on all three.
 
 ## Subscribe
 
@@ -32,21 +33,20 @@ end)
 Connection:Disconnect()
 ```
 
-It fires on every accepted change, including ones that came from another server and turned up when a
-transfer or transaction settled. It does not fire for a refused op, since nothing changed.
+It fires on every accepted change. That includes changes from another server that arrive when a
+transfer or transaction settles. It does not fire for a refused op, since nothing changed.
 
 It does not fire on subscribe either. If you need the current value first, call `Session:Get()`
 yourself.
 
 ## Listeners run inline
 
-Your listener is called on the thread doing the write, not on a fresh one. Two consequences.
+Your listener is called on the thread doing the write, not on a new thread. This has two results.
 
-It must not yield. No `task.wait`, no `:Wait()`. Ledger runs it inside a guard that errors if it
-does. If you need to yield, hand the work to `task.spawn` and get out.
+It must not yield. No `task.wait`, no `:Wait()`. A listener that yields is stopped with an error,
+and Ledger warns. If you need to yield, start the work with `task.spawn` and return.
 
-A listener that throws is caught and warned, and the rest of the listeners still run. One broken HUD
-update won't stop the others.
+A listener that throws is caught, Ledger warns, and the other listeners still run.
 
 Listeners are called over a snapshot of the list, so subscribing or disconnecting from inside a
 listener is safe and takes effect on the next push rather than partway through this one.
@@ -54,10 +54,10 @@ listener is safe and takes effect on the next push rather than partway through t
 ### Listeners that may yield
 
 `Store:Stale()` is the one stream that does not work this way. Ledger calls each of its listeners on
-a fresh thread, so they can yield. A `Flush` or a `PublishAsync` inside one is fine.
+a new thread, so they can yield. A `Flush` or a `PublishAsync` inside one is fine.
 
 Ledger warns when a listener runs for 10 seconds without returning. Every pushed key holds a thread
-until its listener returns, so one that never returns costs a thread per write.
+until its listener returns, so a listener that never returns leaks one thread per write.
 
 ## Map
 
@@ -134,19 +134,19 @@ end):Subscribe(print)
 ## Chains are lazy
 
 `Map`, `Filter`, `Changed` and `Use` don't do anything until something subscribes to the end of the
-chain. The first subscriber wires it up to the source, and the last one to disconnect tears it back
-down.
+chain. The first subscriber connects the chain to its source. When the last subscriber disconnects,
+the chain disconnects from its source.
 
-So building a chain and never subscribing costs nothing, and a chain whose subscribers have all gone
-stops pulling from the session on its own.
+So a chain that nobody subscribes to does no work. A chain whose subscribers have all disconnected
+stops listening to its source.
 
 ## Cleaning up
 
 Nothing disconnects your listeners for you. The session does not clear its observers when the player
-leaves, it only stops pushing to them, so they stay connected and never fire again.
+leaves. It only stops pushing to them, so they stay connected and never fire again.
 
-In practice that's fine. Ledger drops the session when the player leaves, and if you didn't keep the
-connection anywhere it gets collected along with it.
+You usually do not need to disconnect them. Ledger drops the session when the player leaves. If you
+did not keep the connection anywhere, it is garbage collected with the session.
 
 If you did store connections somewhere long lived, disconnect them yourself:
 
@@ -176,10 +176,10 @@ end)
 Observer:Destroy() -> ()
 ```
 
-Drops every listener and runs the teardown.
+Disconnects every listener and disconnects the observer from its source.
 
 <Callout type="warn">
-  Don't call this on `Session:Observe()`. It hands back the session's own stream rather than a copy,
-  so destroying it kills change notifications for everything else watching that player. Destroy your
+  Don't call this on `Session:Observe()`. It returns the session's own stream, not a copy, so
+  destroying it stops change notifications for every other subscriber on that session. Destroy your
   own chains if you want, never the source.
 </Callout>

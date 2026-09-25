@@ -1,32 +1,39 @@
 ---
 title: Overview
-description: A lock free datastore library for Roblox, where state is a fold over a log of changes.
+description: A datastore library for Roblox with no session locks. State is built by replaying a log of changes.
 ---
 
-Ledger keeps player data as a log of changes instead of a document you overwrite. You never write
-state. You write down the change you want, a function you own decides if it's allowed, and state is
-what falls out of replaying those changes.
+Ledger stores player data as a log of changes, not as one document that each save overwrites. You
+don't set state directly. You write an op that describes a change, your reducer decides whether it
+is allowed, and the state is what you get from applying every op in order.
 
 ```luau
-local Store = Ledger.New({
+export type Profile = { Gold: number }
+
+export type Ops = {
+	Earn: { Amount: number },
+	SpendGold: { Amount: number },
+}
+
+local Store = Ledger.New<<Profile, Ops>>({
 	Name = "PlayerData",
 	Default = { Gold = 100 },
 	Reducer = function(State, Op)
 		if Op.Kind == "Earn" then
-			if type(Op.Amount) ~= "number" or Op.Amount <= 0 then
+			if Op.Amount <= 0 then
 				return nil
 			end
 			return { Gold = State.Gold + Op.Amount }
 		end
 
 		if Op.Kind == "SpendGold" then
-			if type(Op.Amount) ~= "number" or Op.Amount > State.Gold then
-				return nil -- refused, on every server, forever
+			if Op.Amount <= 0 or Op.Amount > State.Gold then
+				return nil -- refused on every server
 			end
 			return { Gold = State.Gold - Op.Amount }
 		end
 
-		return nil -- an op this build has never heard of
+		return nil -- a kind this reducer doesn't handle
 	end,
 })
 
@@ -34,54 +41,56 @@ Store:Load(Player)
 Store:Expect(Player):Apply("SpendGold", { Amount = 25 })
 ```
 
-Two servers spend the same 100 gold, both writes go through, the fold takes one and refuses the
-other. Every server agrees, every time.
+If two servers both spend the same 100 gold, both writes land. The reducer accepts the first and
+refuses the second. Every server replays the same log, so every server gets the same result.
 
-## Why there's no session lock
+## No session locks
 
-A session lock stops the second writer. You pay for that in three ways. A dead server leaves a lease
-someone has to wait out. Whoever is locked waits at the join screen. And nothing can reach a player
-who is offline or on another server.
+Most datastore libraries lock a player's data to one server at a time. That has three costs:
 
-A fold that validates makes the bad state unreachable, so nothing needs unlocking when a server
-crashes. It costs discipline instead. Changes have to be ops with names, and you have to write a
-reducer.
+- A server that crashes keeps the lock until it expires.
+- A player waits at the join screen while another server holds the lock.
+- No server can write to a player who is offline or on another server.
+
+Ledger doesn't lock. Your reducer refuses any op that would break your rules, so bad state is never
+written, and a crash leaves nothing to unlock. In return, every change has to be a named op, and you
+have to write the reducer.
 
 ## What's in it
 
 <Cards>
   <Card title="The fold" href="/docs/concepts/the-fold">
-    State is a pure fold of the log, so every server works out the same answer with no lock.
+    State is the log replayed through your reducer, so every server gets the same result without a lock.
   </Card>
   <Card title="Apply and Commit" href="/docs/concepts/apply-and-commit">
-    Apply is instant and local. Commit is durable and tells you whether your op won.
+    Apply changes state on this server immediately. Commit waits for the datastore and tells you whether your op went through.
   </Card>
   <Card title="Cross server writes" href="/docs/reference/store">
-    Edit, Transfer and Tx work on any key, online here, elsewhere, or offline.
+    Edit, Transfer and Tx write to any key, whether the player is on this server, another one, or offline.
   </Card>
   <Card title="Entity stores" href="/docs/guides/entity-stores">
-    String keys for clans, listings, world records. Shared state no server owns.
+    String keys for data no single player owns, like clans, listings and world records.
   </Card>
   <Card title="Transfers" href="/docs/guides/transfers">
-    A balance moved through an escrow, deduped by id, and it fixes itself after a crash.
+    Move a balance between two keys. Each transfer has an id, so it applies once and finishes after a crash.
   </Card>
   <Card title="Transactions" href="/docs/guides/transactions">
-    Two phase commit across two to four keys, which can sit in two different stores.
+    Change two to four keys all or nothing. The keys can be in different stores.
   </Card>
   <Card title="Once" href="/docs/concepts/once">
-    Name an op after a receipt or an order and it only ever applies once.
+    Name an op after a receipt or an order, and it applies only once.
   </Card>
   <Card title="Migrations" href="/docs/guides/migrations">
-    Shape upgrades with a version on them, safe to roll out one server at a time.
+    Change the shape of your data in numbered steps. Safe to roll out one server at a time.
   </Card>
   <Card title="Typed ops" href="/docs/concepts/typed-ops">
-    Name what each op carries and the checker holds every write against it.
+    Declare what each op carries, and every write is type checked against it.
   </Card>
 </Cards>
 
-## What it isn't
+## What Ledger doesn't do
 
-Ledger is server side only. It doesn't replicate to clients, it doesn't do leaderboards or ordered
-stores, and it won't hide a reducer that's wrong. If your reducer reads `os.time()` or
-`math.random()`, two servers will fold the same log into different state. Ledger warns about that in
+Ledger runs on the server only. It doesn't send data to clients, and it has no leaderboards or
+ordered stores. It also can't fix a reducer that is wrong. If your reducer reads `os.time()` or
+`math.random()`, two servers replaying the same log get different state. Ledger warns about this in
 Studio.

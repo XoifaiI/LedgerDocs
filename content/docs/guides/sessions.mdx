@@ -3,8 +3,8 @@ title: Sessions
 description: Loading players, getting at their data, and putting it away again.
 ---
 
-A session is one player's data live on this server. You get one from `Load` and it stays around
-until `Unload` or the store is destroyed.
+A session is one player's data loaded on this server. `Load` creates it, and it stays until `Unload`
+or until the store is destroyed.
 
 ## The lifecycle
 
@@ -22,18 +22,17 @@ game:BindToClose(function()
 end)
 ```
 
-`Load` yields while it reads the record and folds it. If that fails, the player gets kicked with a
-message asking them to rejoin, which is better than letting them play on a blank profile and
-overwrite the real one. If you want to answer differently depending on why it failed, pass
+`Load` yields while it reads the record and folds it. If that fails, Ledger kicks the player with a
+message asking them to rejoin, so they never play on an empty profile that could overwrite the real
+one. To handle each failure reason differently, pass
 [`OnLoadFailed`](/docs/reference/ledger#onloadfailed) when you build the store.
 
-Calling `Load` twice for the same player warns and does nothing the second time. If the player
-leaves while the load is still going, Ledger notices and releases the session instead of leaving it
-hanging around.
+Calling `Load` a second time for the same player warns and does nothing. If the player leaves while
+the load is still running, Ledger releases the session when the load finishes.
 
-`Unload` cancels the autosave timer, pushes everything queued, and yields until it's durable.
+`Unload` stops the autosave timer, writes every queued op, and yields until they are saved.
 
-A session you kept a reference to still answers after that. It refuses every write with
+A reference you kept to the session still works after that, but every write returns
 [`Closed`](/docs/concepts/reasons):
 
 ```luau
@@ -45,22 +44,19 @@ Session:Apply("Add", { Amount = 1 })   --> false, "Closed"
 
 ## Getting the session
 
-There are four ways, and which one you want depends on whether you can cope with it not being there.
+Which method to use depends on what should happen when the player isn't loaded.
 
-`Store:Get(Player)` gives you the session or `nil`. Use it when not loaded is a normal thing that can
-happen.
+`Store:Get(Player)` returns the session, or `nil`. Use it when the player not being loaded is normal.
 
-`Store:Expect(Player)` gives you the session or throws. Use it in code that only runs after you know
-the player is loaded, so you get an error instead of a silent `nil` if you're wrong.
+`Store:Expect(Player)` returns the session, or throws an error. Use it in code that only runs once
+the player is loaded, so a mistake throws an error instead of returning `nil`.
 
-`Store:IsLoaded(Player)` is just the boolean.
+`Store:IsLoaded(Player)` returns a boolean.
 
-`Store:WaitForLoaded(Player)` yields until the session is there and gives it back, or gives `nil` if
-the player left before it finished. This is the one for callbacks that fire during a join, like
-`ProcessReceipt`.
+`Store:WaitForLoaded(Player)` yields until the session is loaded and returns it, or returns `nil` if
+the player left first. Use it in callbacks that can run during a join, like `ProcessReceipt`.
 
-There's also `Store:Read(Player)`, which gives you the state table directly or `nil`, for when you
-only want to look at something.
+`Store:Read(Player)` returns the state table, or `nil`. Use it when you only need to read.
 
 ```luau
 Store:IsLoaded(Player)        --> false
@@ -74,30 +70,29 @@ Store:Read(Player)            --> { Gold = 0 }
 ```
 
 These seven take the `Player`: `Load`, `Unload`, `Get`, `Expect`, `IsLoaded`, `WaitForLoaded` and
-`Read`. Every other method takes a key, so pass `Player.UserId`. `Store:Peek(Player)` throws and says
-what it wanted.
+`Read`. Every other method takes a key, so pass `Player.UserId`. `Store:Peek(Player)` throws an error
+that says it wants a key.
 
 ## Autosave
 
-Every session autosaves on a 30 second timer. It pushes queued ops, and if the log has gotten long
-or heavy it compacts as well.
+Every session autosaves every 30 seconds. It writes the queued ops, and compacts the log if it has
+grown too long or too large.
 
-If the server is out of datastore budget, the autosave is skipped and Ledger warns. That's the point
-where ops start piling up, and if it keeps going you'll start seeing
-[`Backlog`](/docs/concepts/reasons) on writes.
+If the server is out of datastore budget, the autosave is skipped and Ledger warns. Ops keep
+queueing, and if it goes on, writes start returning [`Backlog`](/docs/concepts/reasons).
 
-A session with nothing queued and no transaction parked on its key reads every two minutes instead.
-It has nothing to write, so it only checks what other servers wrote. That read is how a player who
-was sent gold or traded with finds out.
+A session with nothing queued and no transaction leg parked on its key reads the key every two
+minutes instead. It has nothing to write, so it only picks up what other servers wrote. That read is
+how a session sees gold another player sent, or a trade.
 
-[`Store:Stale()`](/docs/reference/store#stale) names each key this server changes, so you can flush
-that session at once rather than wait for the read. See
+[`Store:Stale()`](/docs/reference/store#stale) fires with each key this server writes with `Edit`,
+`Transfer` or `Tx`, so you can flush that session at once instead of waiting for the read. See
 [Transactions](/docs/guides/transactions#a-live-session-does-not-know-a-leg-wrote-to-it).
 
 ## Log size
 
-`Session.LogSize` is how many ops are in the stored log, and `Session.LogBytes` is roughly how many
-bytes those ops plus the queued ones take. Both are read only and mostly useful for a debug readout.
+`Session.LogSize` is the number of ops in the stored log, and `Session.LogBytes` is roughly the size
+in bytes of those ops plus the queued ones. Both are read only, and mostly useful for a debug display.
 
 A queued op counts in `LogBytes` but not in `LogSize`, because it is not in the stored log yet:
 
@@ -107,19 +102,20 @@ Session:Apply("Add", { Amount = 5 })
 Session.LogSize, Session.LogBytes   --> 0, 54
 ```
 
-You don't need to watch them. Autosave compacts on its own. `Session:Compact()` is there if you want
-to force it, like right before you do something that's about to write a lot.
+You don't need to watch them, because autosave compacts on its own. Call `Session:Compact()` to
+compact now, for example right before something that writes a lot.
 
 ## Shutting down
 
-`Ledger.CloseAll()` is the whole shutdown path. It stops the background sweeper, tells every store's
-queue to skip ahead to the last write, saves every live session, and yields until all of it is done.
+`Ledger.CloseAll()` handles the whole shutdown. It stops the background sweeper, and on each key it
+drops every queued datastore call except the newest, which returns `Closed` to the dropped callers.
+Then it saves every loaded session and yields until everything is done.
 
-Put it in `BindToClose` and don't put anything else there. Roblox gives you a limited window on
-shutdown, and `CloseAll` is already built to spend it in the right order.
+Put it in `BindToClose` with nothing else. Roblox gives a server limited time to shut down, and
+`CloseAll` does the steps in the right order to fit.
 
-`Store:Destroy()` does the same for one store and takes it out of the registry, so you can build
-another one with that name. You mostly want this in tests.
+`Store:Destroy()` does the same for one store and frees its name, so you can build another store with
+that name. This is mostly for tests.
 
 ## Watching state
 
@@ -129,13 +125,13 @@ local Connection = Session:Observe():Subscribe(function(State)
 end)
 ```
 
-It fires on every change that goes through, which includes ones that came from another server and
-turned up when a transfer or transaction settled. It does not fire for a refused op, because nothing
-changed.
+It fires on every change that is applied, including changes from another server that arrive when the
+session reads the key, such as a transfer or a transaction. It doesn't fire for a refused op, because
+nothing changed.
 
-A listener here runs on the thread doing the write and must not yield. `Store:Stale()` is the one
-stream that lets a listener yield.
+A listener runs on the thread doing the write, so it must not yield. `Store:Stale()` is the only
+observer whose listeners can yield.
 
-Nothing disconnects your listeners for you. A released session stops pushing, so they never fire
-again, and if you didn't store the connection anywhere it gets collected with the session. If you
-did store it, disconnect it yourself. See [Observer](/docs/reference/observer).
+Ledger never disconnects your listeners. A released session stops pushing, so they never fire again,
+and a connection you didn't store is garbage collected with the session. If you did store it,
+disconnect it yourself. See [Observer](/docs/reference/observer).

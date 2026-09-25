@@ -9,7 +9,7 @@ description: Install Ledger, build a store, load a player.
   <Tab value="Wally">
 ```toml
 [dependencies]
-Ledger = "xoifaii/ledger@6.0.1"
+Ledger = "xoifaii/ledger@6.1.0"
 ```
   </Tab>
   <Tab value="Rojo">
@@ -26,46 +26,52 @@ See [Using Ledger from TypeScript](/docs/guides/typescript) for the line your pr
   </Tab>
 </Tabs>
 
-Ledger installs where both sides can see it, so you can keep it next to shared type definitions. It
-still only runs on the server, because only the server can reach a datastore, and requiring it from a
-client says so and stops there.
+You can put Ledger where the client can also see it, next to shared type definitions. It still only
+runs on the server, because only the server can reach a datastore. Requiring it from a client throws
+an error.
 
 ### If you code with an AI agent
 
-Ledger ships an agent skill. It tells the agent which call to use safely, which calls are safe to run
-on a live player's key, and what a bug that quietly duplicates money looks like in your code.
+Ledger ships an agent skill. It tells the agent which call fits each job, which calls are safe to run
+on a live player's key, and what a bug that duplicates money without an error looks like in your code.
 
 ```
 npx skills add XoifaiI/Ledger
 ```
 
 It installs for Claude Code, Codex, Cursor, Copilot, Gemini and the rest in one go, and it carries a
-copy of these docs, so it still answers when the agent can't reach the web.
+copy of these docs, so it still works when the agent can't reach the web.
 
 ## Build a store
 
 A store is one datastore name plus the rules for everything under it. Build it once, near the top of
 a server script.
 
-Start simple. One field, and a reducer that hands back the next state or `nil` to refuse:
+Start simple: one field, the ops that change it, and a reducer that returns the next state or `nil`
+to refuse:
 
 ```luau
 local Ledger = require(ServerStorage.Ledger)
 
 export type Profile = {
-	Gold: number
+	Gold: number,
 }
 
-local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+export type Ops = {
+	AddGold: { Amount: number },
+	SpendGold: { Amount: number },
+}
+
+local function Reducer(State: Profile, Op: Ledger.Op<Ops>): Profile?
 	if Op.Kind == "AddGold" then
-		if type(Op.Amount) ~= "number" or Op.Amount <= 0 then
+		if Op.Amount <= 0 then
 			return nil
 		end
 		return { Gold = State.Gold + Op.Amount }
 	end
 
 	if Op.Kind == "SpendGold" then
-		if type(Op.Amount) ~= "number" or Op.Amount > State.Gold then
+		if Op.Amount <= 0 or Op.Amount > State.Gold then
 			return nil
 		end
 		return { Gold = State.Gold - Op.Amount }
@@ -74,7 +80,7 @@ local function Reducer(State: Profile, Op: Ledger.Op): Profile?
 	return nil
 end
 
-local Store = Ledger.New({
+local Store = Ledger.New<<Profile, Ops>>({
 	Name = "PlayerData",
 	Default = { Gold = 100 },
 	Reducer = Reducer,
@@ -82,8 +88,12 @@ local Store = Ledger.New({
 })
 ```
 
-The reducer takes the state and one op and gives back the next state, or `nil` to refuse it. It has
-to be pure. [Writing a reducer](/docs/concepts/reducer) covers the rules and what breaks when you
+`Ops` lists each kind of op and the fields it carries. Every write is checked against it, so a
+misspelled kind or a missing field is an error where you wrote it, and the reducer reads
+`Op.Amount` as a number. See [Typed ops](/docs/concepts/typed-ops).
+
+The reducer takes the state and one op and returns the next state, or `nil` to refuse it. It has to
+be pure. [Writing a reducer](/docs/concepts/reducer) covers the rules and what breaks when you
 don't keep them.
 
 `Balance` is optional. You only need it for [transfers](/docs/guides/transfers), and it names a
@@ -92,19 +102,24 @@ number field that's already in `Default`.
 ### Once there is more than one field
 
 Writing the next state out by hand stops working as soon as `Default` grows. Any field you don't
-mention is not in the state you handed back, so it is gone from that moment on.
+mention is not in the state you returned, so it is gone from that moment on.
 
 Copy the state and change what you need instead:
 
 ```luau
 export type Profile = {
 	Gold: number,
-	Items: { string }
+	Items: { string },
 }
 
-local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+export type Ops = {
+	AddGold: { Amount: number },
+	PickUp: { Item: string },
+}
+
+local function Reducer(State: Profile, Op: Ledger.Op<Ops>): Profile?
 	if Op.Kind == "AddGold" then
-		if type(Op.Amount) ~= "number" or Op.Amount <= 0 then
+		if Op.Amount <= 0 then
 			return nil
 		end
 
@@ -114,10 +129,6 @@ local function Reducer(State: Profile, Op: Ledger.Op): Profile?
 	end
 
 	if Op.Kind == "PickUp" then
-		if type(Op.Item) ~= "string" then
-			return nil
-		end
-
 		local Next = table.clone(State)
 		Next.Items = table.clone(State.Items)
 		table.insert(Next.Items, Op.Item)
@@ -129,11 +140,11 @@ end
 ```
 
 `table.clone` is shallow, so `Items` needs a copy of its own before you touch it. The state you were
-handed is deep frozen, so writing into it throws on the line that did it rather than breaking a fold
+given is deep frozen, so writing into it throws on the line that did it rather than breaking a fold
 somewhere later.
 
-Deeper than that and the copying gets hard to read. [Advanced
-reducers](/docs/concepts/advanced-reducers) has a `SetPath` for it.
+When state is nested more than one level deep, the copying gets hard to read. [Advanced
+reducers](/docs/concepts/advanced-reducers#changing-nested-state) has a helper for it.
 
 ## Load and unload
 
@@ -167,7 +178,7 @@ print(Session:Get().Gold)          --> 150
 ```
 
 `Apply` is instant. It runs your reducer against live state, updates it, and queues the op for the
-next save. You get back `(boolean, Reason?)`, and `false` means either your reducer refused it or
+next save. It returns `(boolean, Reason?)`, and `false` means either your reducer refused it or
 Ledger did.
 
 When you need the write to be durable before you act on it, use `Commit`:
@@ -189,8 +200,10 @@ Session:Observe():Subscribe(function(State)
 end)
 ```
 
-This fires on every change that goes through, including ones that turn up from another server when a
-transfer or a transaction settles.
+This fires on every change the session applies. A write from somewhere else, such as a transfer or
+a transaction, fires it only once the session reads the key again. That happens at the next autosave
+while it has ops queued, within two minutes while it has none, or when you call `Flush`. See
+[Transactions](/docs/guides/transactions#a-live-session-does-not-know-a-leg-wrote-to-it).
 
 ## Running without a datastore
 
@@ -198,7 +211,7 @@ transfer or a transaction settles.
 limits, no API access, no published place.
 
 ```luau
-local Store = Ledger.New({
+local Store = Ledger.New<<Profile, Ops>>({
 	Name = "PlayerData",
 	Default = { Gold = 100, Items = {} },
 	Reducer = Reducer,
@@ -206,22 +219,12 @@ local Store = Ledger.New({
 })
 ```
 
-The mock is stricter than Studio on purpose, because Studio hands you request budgets a live server
-never gets. See [Testing](/docs/guides/testing).
+The mock is stricter than Studio on purpose, because Studio has request budgets a live server never
+gets. See [Testing](/docs/guides/testing).
 
-## Naming your ops
+## A store that takes any op
 
-Everything above takes any kind with any fields. Once the kinds settle down, write down what each one
-carries. The checker then holds every write against it, and the reducer reads its fields without a
-cast:
-
-```luau
-export type Ops = {
-	SpendGold: { Amount: number },
-	AddItem: { Item: string },
-}
-
-local Store = Ledger.NewTyped<<Profile, Ops>>(Options)
-```
-
-See [Typed ops](/docs/concepts/typed-ops).
+Leave out the two types, `Ledger.New(Options)`, and the store takes any kind with any fields. That
+suits a store whose ops are still changing. The reducer then gets `Ledger.Op`, every field reads as
+`unknown`, and the reducer has to check each field's type before it uses it. See
+[Typed ops](/docs/concepts/typed-ops).

@@ -3,8 +3,8 @@ title: Migrations
 description: Changing the shape of your data, and changing the reducer, while old servers are still running.
 ---
 
-A migration is a function that takes the old state and gives back the new one. You add them to the
-end of the list and never touch the ones already there.
+A migration is a function that takes the old state and returns the new one. Add new ones to the end
+of the list and never change the ones already there.
 
 ```luau
 local Store = Ledger.New({
@@ -33,34 +33,31 @@ local Store = Ledger.New({
 })
 ```
 
-The number of migrations in the list is the version. A record remembers which version it was written
-at, and when a server loads one that's behind, it runs the missing steps in order before folding.
+The number of migrations in the list is the version. A record stores the version it was written at.
+When a server loads a record with a lower version, it runs the missing steps in order before the
+fold.
 
-Migrations only run on the snapshot, at load. They never see ops.
+Migrations run on the snapshot at load. They never see ops.
 
 ## New fields don't need one
 
-Ledger reconciles the folded state against `Default` on every load, so a field you add to `Default`
-shows up on old profiles with its default value automatically. You only need a migration when you're
-changing something that's already there, like renaming a field or reshaping it.
+On every load Ledger adds each field of `Default` that the stored state is missing. A field you
+add to `Default` appears on old profiles with its default value. You only need a migration to change
+a field that already exists, such as renaming or reshaping it.
 
 ## Rolling deploys
 
-This is the part that actually needs thinking about. During a deploy you have old servers and new
-servers running at the same time, on the same data.
+During a deploy, old servers and new servers run at the same time on the same data.
 
-New servers write records stamped with the new version. An old server that reads one and doesn't
-recognise the version refuses to fold it, and errors instead. That's on purpose. The alternative is
-an old server quietly folding a record it doesn't understand and writing back a version of the
-profile with the new fields stripped out.
+New servers write records with the new version. An old server that reads one refuses to fold it.
+Otherwise it would fold a record it doesn't understand and write it back with the new fields removed.
 
-`Compatible = true` is how you say a step is safe for that. It means the migration only adds things,
-so an old server can read the record, ignore what it doesn't know, and write back without losing
-anything.
+`Compatible = true` marks a step that only adds things. An old server can read a record at that
+version, ignore the fields it doesn't know, and write it back without losing anything.
 
-Ledger keeps track of the last step that wasn't compatible. Any record at or above that point can be
-read by an older server. Anything below it can't, and the old server answers
-[`Behind`](/docs/concepts/reasons) instead of guessing.
+The floor is the version of the last step that isn't compatible. A server whose build has at least
+that many migrations can read the record. An older one returns
+[`Behind`](/docs/concepts/reasons).
 
 ```luau
 -- new build, two migrations, the first of them not compatible
@@ -71,53 +68,48 @@ Store:Peek(UserId):Wait()   --> nil, "Behind"
 Store:Reset(UserId):Wait()  --> false, "Behind"
 ```
 
-The version sits on the snapshot, so a key gets one the first time it compacts. Before that the
-record is only ops, and an older server reads it normally.
-
-The floor doesn't wait for a compaction. Every write stamps it, so a key can start turning an old
-server away before it has ever compacted:
+The first write to a key stores `Default` as its snapshot along with the version and the floor.
+Every later write raises the floor to the writer's floor, so a key turns an old server away from
+the first write a new server makes:
 
 ```luau
 Store:Edit(UserId, "Add", { Amount = 5 }):Wait()   --> false, "Behind"
 ```
 
-The floor is checked first, inside the transform, so nothing reaches the log. The write doesn't
-half happen and there's nothing queued behind it. The deploy clears it.
+The floor is checked inside the datastore update, before the op reaches the log, so nothing is
+written. `Behind` stops once the deploy finishes.
 
-An older server can never compact one of these records, so it can never write a snapshot in the old
-shape.
+An older server never compacts one of these records, so it never writes a snapshot in the old shape.
 
-`Behind` is the one reason it's pointless to retry, because it isn't about the datastore. It says
-this server is running an older build than the one that wrote the record, and it clears when the
-deploy finishes. Never fall back to a fresh profile on `Behind`, the stored data is fine and writing
-over it is how you lose it.
+Don't retry `Behind`. It isn't a datastore failure. It means this server runs an older build than
+the one that wrote the record, and it stops once the deploy finishes. Never fall back to a fresh
+profile on `Behind`. The stored data is fine, and writing over it loses it.
 
-So:
+In short:
 
-Adding a field, adding a table, adding a default. Mark it `Compatible = true` and old servers keep
-working straight through the deploy.
-
-Renaming, deleting, or reshaping a field. Leave it plain. Old servers will refuse those records,
-which is what you want, and the errors stop as soon as the deploy finishes.
+- Adding a field, a table or a default: mark it `Compatible = true`, and old servers keep working
+  through the deploy.
+- Renaming, deleting or reshaping a field: leave it unmarked. Old servers refuse those records with
+  `Behind` until the deploy finishes.
 
 ## Don't drop something Default still declares
 
-If a migration removes a field but `Default` still lists it, the reconcile puts it straight back on
-every load and your migration does nothing. Nothing warns about this. Ledger cannot tell a field you
-meant to drop from one you meant to keep.
+If a migration removes a field but `Default` still lists it, the load puts it back with its default
+value and the migration has no effect. Nothing warns about this, because Ledger can't tell a field
+you meant to drop from one you meant to keep.
 
-Take it out of `Default` at the same time you write the migration to remove it.
+Remove the field from `Default` in the same change as the migration.
 
 ## Rules
 
-Migrations have to be pure and can't yield, same as the reducer.
+Migrations have to be pure and can't yield, like the reducer.
 
-They have to return a table. Returning anything else errors on load with the step number.
+They have to return a table. Anything else throws an error at load that names the step.
 
-Leave anything starting with an underscore alone. Those are Ledger's own fields, the money set aside
-for a transfer, the applied names, the units reserved and the tally. A migration that rebuilds the
-state from scratch drops them, so Ledger puts them back after every step and names the step that did
-it. Copy the state and change what you meant to change:
+Don't change fields that start with an underscore. They are Ledger's own: the money set aside for
+a transfer, the applied names, and the totals `Bump` keeps. A migration that builds a new table drops
+them, so Ledger puts them back after every step and warns with the step number. Copy the state and
+change only what you meant to:
 
 ```luau
 -- keeps everything it did not mean to touch
@@ -134,28 +126,27 @@ function(State)
 end
 ```
 
-Never reorder them, never delete one, never edit one that's already shipped. The list index is the
-version, so changing it changes what every existing record means.
+Never reorder, delete or edit a migration that has shipped. The list index is the version, so
+changing the list changes what every stored version means.
 
-Version numbers only go up. A record written at a version newer than this server knows is either
-read through the compatible path or refused, never folded down.
+Versions only go up. A server reads a record with a newer version only when the floor allows it,
+and refuses it otherwise. It never migrates a record down.
 
 ## Changing the reducer
 
-Ledger puts no version on the reducer. A migration changes the snapshot, not the ops. Each server
-folds a log with the reducer that it runs now, so a change to the reducer changes what the older ops
-do.
+The reducer has no version. A migration changes the snapshot, not the ops. Each server folds the log
+with the reducer it runs now, so changing the reducer changes what older ops do.
 
-Add a kind for a new rule. You can widen a kind to accept ops that it refused before. Do not narrow
-one, do not change what one does, and never use a name twice.
+Add a new kind for a new rule. You can widen a kind to accept ops it refused before. Don't narrow
+a kind, don't change what it does, and never reuse a kind name.
 
-A branch is not dead code. It builds part of the state of every record whose log still holds one of
-its ops. Keep it when the feature goes, and keep it correct through later migrations:
+Keep the branch for a kind after its feature is removed. Every record whose log still holds one of
+its ops needs it to fold. Keep it correct through later migrations too:
 
 ```luau
 -- pets were taken out of the game. the ops are still in the logs, so the rule stays
 if Op.Kind == "BuyPet" then
-	if type(Op.Cost) ~= "number" or Op.Cost > State.Gold then
+	if Op.Cost > State.Gold then
 		return nil
 	end
 
@@ -167,30 +158,30 @@ if Op.Kind == "BuyPet" then
 end
 ```
 
-Delete it and the fold leaves out that gold and that pet, the key stops compacting with a warning
-naming the kind, and the log grows until writes answer [`Full`](/docs/concepts/reasons). Put the
-branch back and both return.
+If you delete it, the fold leaves out that gold and that pet. The key stops compacting, with a warning
+that names the kind, and the log grows until writes return [`Full`](/docs/concepts/reasons). Putting
+the branch back restores both.
 
-`Reset` does not get a key out of that. It writes the default state as another op, so the op it cannot
-apply is still the oldest one and the log still cannot compact. It says so when you try. Only a build
-that folds the op, or erasing the key, clears it.
+`Reset` doesn't fix that. It writes the default state as another op, so the op that can't be applied
+is still the oldest one and the log still can't compact. `Reset` warns about this. Only a build that
+folds the op, or erasing the key, clears it.
 
-Do not swap it for a branch that accepts the op and changes nothing. The state goes the same way,
-and this time the key compacts, so the snapshot keeps that result:
+Don't replace it with a branch that accepts the op and changes nothing. The state loses the same
+gold and pet, but this time the key compacts, so the snapshot saves that result permanently:
 
 ```luau
--- wrong. the fold drops what the op did, and a compaction writes that down for good
+-- wrong. the fold drops what the op did, and a compaction saves that permanently
 if Op.Kind == "BuyPet" then
 	return table.clone(State)
 end
 ```
 
-Only a loaded session compacts, and only when the log is long enough, so an offline key holds its
-ops until you deploy a build that folds them.
+Only a loaded session compacts, and only when the log is long enough. An offline key keeps its ops
+until you deploy a build that folds them.
 
-A change to the reducer does not move the floor, because Ledger cannot see it. Two builds then fold
-one log by different rules during a deploy. Add a migration that gives back its state unchanged when
-the change is not safe for both:
+A change to the reducer doesn't raise the floor, because Ledger can't detect it. During the deploy,
+two builds fold one log with different rules. When that isn't safe, add an unmarked migration that
+returns the state unchanged. It raises the floor, so old servers stop writing to the key:
 
 ```luau
 Migrations = {
@@ -199,12 +190,12 @@ Migrations = {
 }
 ```
 
-A new kind is not always safe for both. An old server refuses the new op and folds the key without
-it. If the new op changes a field that another kind reads, the old server can write an op that the
-new build refuses. For example, a new `Tax` op takes gold. An old server then writes a `SpendGold` op
-against gold that the tax already took. The old server tells the game that this op went through. The
-new build refuses it, so it never applies, and the key cannot compact again. When a new kind changes
-a field that other kinds read, add the migration above as well:
+A new kind isn't always safe either. An old server refuses the new op and folds the key without it.
+If the new op changes a field that another kind reads, the old server can write an op that the new
+build refuses. For example, a new `Tax` op takes gold. An old server then writes a `SpendGold` op
+against gold the tax already took, and tells the game it went through. The new build refuses it, so
+it never applies, and the key can't compact again. When a new kind changes a field that other kinds
+read, add the same kind of migration:
 
 ```luau
 Migrations = {

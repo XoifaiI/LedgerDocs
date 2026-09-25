@@ -1,248 +1,155 @@
 ---
 title: Advanced reducers
-description: Nested state, dispatch, and what folding costs you.
+description: One handler per op kind, changing nested state, and what folding costs.
 ---
 
-[Writing a reducer](/docs/concepts/reducer) covers the rules. This is what to do once the state is
-deep, the op kinds run past a dozen, and the if chain stops being readable.
+[Writing a reducer](/docs/concepts/reducer) covers the rules. This page is for a reducer with deep
+state and many op kinds, where one long `if` chain and cloning by hand get hard to read.
 
-Nothing here is a dependency. It's all a few lines you paste into your own project.
+It uses one small module, `Drafts`, which you copy into your project. Ledger does not ship it. The
+full source is at the [end of the page](#the-drafts-module).
 
-## Reaching into nested state
+## One handler per op kind
 
-`table.clone` is shallow and the state is deep frozen, so every level you touch needs its own clone.
-Two levels down that's still fine:
-
-```luau
-local Next = table.clone(State)
-Next.Pets = table.clone(State.Pets)
-Next.Pets[Op.PetId] = table.clone(State.Pets[Op.PetId])
-Next.Pets[Op.PetId].Level += 1
-return Next
-```
-
-Three levels down it stops being readable. Forget one line and you get `attempt to modify a readonly
-table`. Forget it in a branch you rarely reach and you get a fold that disagrees with itself.
-
-Write it once instead:
+Write a table with one function for each kind in your `Ops`, and give it to `Drafts.Reducer`:
 
 ```luau
-local function SetPath<S>(State: S, Path: { any }, Value: any): S
-	local Depth = #Path
-	if Depth == 0 then
-		return Value
-	end
+local Drafts = require(ReplicatedStorage.Drafts)
+local Open = Drafts.Open
 
-	local Root = table.clone(State :: any)
-	local Node = Root
+type Pet = { Name: string, Level: number }
 
-	for Index = 1, Depth - 1 do
-		local Key = Path[Index]
-		local Held = Node[Key]
-		assert(
-			Held == nil or type(Held) == "table",
-			`SetPath: '{tostring(Key)}' holds a {typeof(Held)}, not a table`
-		)
-
-		local Fresh = if Held == nil then {} else table.clone(Held)
-		Node[Key] = Fresh
-		Node = Fresh
-	end
-
-	Node[Path[Depth]] = Value
-	return Root :: any
-end
-```
-
-The whole example above becomes one line:
-
-```luau
-return SetPath(State, { "Pets", Op.PetId, "Level" }, State.Pets[Op.PetId].Level + 1)
-```
-
-Only the path you name gets cloned. Every other subtree stays shared by reference. Ledger then
-re-freezes only what changed.
-
-Incrementing needs the old value first. Give that its own function:
-
-```luau
-local function UpdatePath<S>(State: S, Path: { any }, Change: (Held: any) -> any, Fallback: any?): S
-	local Held: any = State
-	for _, Key in Path do
-		if type(Held) ~= "table" then
-			Held = nil
-			break
-		end
-		Held = Held[Key]
-	end
-
-	return SetPath(State, Path, Change(if Held == nil then Fallback else Held))
-end
-```
-
-```luau
-return UpdatePath(State, { "Pets", Op.PetId, "Level" }, function(Level: number): number
-	return Level + 1
-end, 0)
-```
-
-Setting a path to `nil` removes that key, so there's no separate remove.
-
-Changing two or three fields at the top takes a third one, so you don't clone the root once per
-field:
-
-```luau
-local function Patch<S>(State: S, Changes: { [any]: any }): S
-	local Next = table.clone(State :: any)
-	for Key, Value in Changes do
-		Next[Key] = Value
-	end
-	return Next :: any
-end
-```
-
-```luau
-return Patch(State, { Coins = State.Coins - 250, Owned = State.Owned + 1 })
-```
-
-Those three cover it. `Patch` for fields at the top, `SetPath` to write down a path, `UpdatePath`
-to read one and write it back.
-
-## Dispatching without an if chain
-
-Past a dozen kinds a table of handlers is easier to read. It also stops you shadowing a branch by
-accident:
-
-```luau
-type Handler = (State: Profile, Op: Ledger.Op) -> Profile?
-
-local Handlers: { [string]: Handler } = {}
-
-function Handlers.SpendGold(State: Profile, Op: Ledger.Op): Profile?
-	if type(Op.Amount) ~= "number" or Op.Amount <= 0 or Op.Amount > State.Gold then
-		return nil
-	end
-	return SetPath(State, { "Gold" }, State.Gold - Op.Amount)
-end
-
-function Handlers.LevelPet(State: Profile, Op: Ledger.Op): Profile?
-	if State.Pets[Op.PetId] == nil then
-		return nil
-	end
-	return UpdatePath(State, { "Pets", Op.PetId, "Level" }, function(Level: number): number
-		return Level + 1
-	end, 0)
-end
-
-local function Reducer(State: Profile, Op: Ledger.Op): Profile?
-	local Handler = Handlers[Op.Kind]
-	if Handler == nil then
-		return nil
-	end
-	return Handler(State, Op)
-end
-```
-
-A missing handler returns `nil`, which is a refusal. An old server should refuse a kind it has never
-heard of. See [ops you don't know](/docs/concepts/reducer#ops-you-dont-know).
-
-### With named ops
-
-A store built with [`NewTyped`](/docs/concepts/typed-ops) hands its reducer the op as one of your
-kinds, so the handler table above will not build against it. A handler typed `Ledger.Op` is wider
-than the reducer that store asks for.
-
-Narrow on `Op.Kind` first and give each kind its own function. `Ledger.OpOf` picks one kind out of
-the map:
-
-```luau
-type Ops = {
-	SpendGold: { Amount: number },
-	LevelPet: { PetId: string },
+type Profile = {
+	Gold: number,
+	Title: string?,
+	Items: { string },
+	Stats: { Level: number, Best: { Score: number } },
+	Pets: { [string]: Pet },
+	Boost: { Until: number }?,
 }
 
-local function SpendGold(State: Profile, Op: Ledger.OpOf<Ops, "SpendGold">): Profile?
-	if Op.Amount <= 0 or Op.Amount > State.Gold then
-		return nil
-	end
-	return SetPath(State, { "Gold" }, State.Gold - Op.Amount)
-end
+type Ops = {
+	AddGold: { Amount: number },
+	Buy: { Item: string },
+	Score: { Score: number },
+	Feed: { Pet: string },
+	Boost: { For: number },
+}
 
-local function LevelPet(State: Profile, Op: Ledger.OpOf<Ops, "LevelPet">): Profile?
-	if State.Pets[Op.PetId] == nil then
-		return nil
-	end
-	return SetPath(State, { "Pets", Op.PetId, "Level" }, State.Pets[Op.PetId].Level + 1)
-end
+local Kinds: Drafts.Handlers<Profile, Ops> = {
+	AddGold = function(State, Op)
+		State.Gold += Op.Amount
+		State.Title = "Rich"
+		return State
+	end,
 
-local function Reducer(State: Profile, Op: Ledger.Op<Ops>): Profile?
-	if Op.Kind == "SpendGold" then
-		return SpendGold(State, Op)
-	elseif Op.Kind == "LevelPet" then
-		return LevelPet(State, Op)
-	end
+	Buy = function(State, Op)
+		table.insert(Open(State).Items, Op.Item)
+		return State
+	end,
 
-	return nil
-end
+	Score = function(State, Op)
+		local Stats = Open(State).Stats
+		Stats.Level += 1
+		local Best = Open(Stats).Best
+		Best.Score = math.max(Best.Score, Op.Score)
+		return State
+	end,
+
+	Feed = function(State, Op)
+		local Pets = Open(State).Pets
+		if Pets[Op.Pet] == nil then
+			return nil
+		end
+		Open(Pets)[Op.Pet].Level += 1
+		return State
+	end,
+
+	Boost = function(State, Op)
+		local Boost = Open(State).Boost
+		if Boost == nil then
+			State.Boost = { Until = Op.For }
+		else
+			Boost.Until += Op.For
+		end
+		return State
+	end,
+}
+
+local Store = Ledger.New<<Profile, Ops>>({
+	Name = "PlayerData",
+	Default = {
+		Gold = 0,
+		Items = {},
+		Stats = { Level = 1, Best = { Score = 0 } },
+		Pets = {},
+	},
+	Reducer = Drafts.Reducer<<Profile, Ops>>(Kinds),
+})
 ```
 
-`Op.Amount` is a number and `Op.PetId` is a string inside their own handlers, so every `type(...)`
-check in this section is gone. Both shapes are read only, so a handler that writes to the op it was
-given stops the build whether it took `Ledger.Op<Ops>` or `Ledger.OpOf`.
+Each handler gets a copy of the state and the op, already narrowed to its kind, so `Op.Amount` in
+`AddGold` is a number. Return the state to accept the op, or `nil` to refuse it.
 
-The if chain comes back with it. A table lookup cannot tell the checker which kind it found, so
-narrowing needs the comparison. Keep the handler table and build that store with `Ledger.New` if
-the dispatch matters to you more than the field types do.
+- **Annotate the table.** `Kinds` has to be a local annotated `Drafts.Handlers<Profile, Ops>`.
+  Without the annotation its functions are not typed.
+- **Every kind needs a handler.** A kind in `Ops` with no handler is a type error. An op of a kind
+  the table does not have is refused, which is what an older server should do with a kind it has
+  never seen. See [ops you don't know](/docs/concepts/reducer#ops-you-dont-know).
+- **The op is read only.** Writing to a field of `Op` is a type error.
 
 <Callout type="warn">
-  Don't put a `__` prefix on your own kinds. Ledger reserves that for its transfer and transaction
+  Don't start your own kinds with `__`. Ledger reserves that prefix for its transfer and transaction
   ops, and `Apply` refuses them with [`Invalid`](/docs/concepts/reasons).
 </Callout>
 
-## Splitting by domain
+## Changing nested state
 
-Once several people are adding kinds, give each domain its own file and its own slice of the state:
+A handler can write top level fields directly, like `State.Gold` above. Nested tables are read only.
+Writing `State.Stats.Level` is a type error, and it throws at runtime if the type checker misses it.
+
+`Open` makes a nested table writable. `Open(State).Items` copies `Items`, puts the copy back into
+`State`, and returns the copy. Open once for each level you go down:
 
 ```luau
--- Pets.luau
-local Pets = {}
+local Best = Open(Open(State).Stats).Best
+Best.Score += 10
+```
 
-function Pets.Handlers.Hatch(Owned: { [string]: Pet }, Op: Ledger.Op): { [string]: Pet }?
-	...
+For a map, open the map and then the entry you change:
+
+```luau
+Open(Open(State).Pets)[PetId].Level += 1
+```
+
+- Only the tables you open are copied. Everything else is shared with the old state.
+- Opening the same table again returns the same copy, so no write is lost.
+- A field that can be `nil`, like `Boost`, opens to `nil` when it is missing. Assign a new table to
+  the field on `State` instead, as the `Boost` handler does above.
+- To add or remove an entry, open the table that holds it: `Open(State).Pets[PetId] = nil`.
+
+### Helpers that read the state
+
+A handler's state is not a `Profile`, because its nested tables are read only. A helper that takes
+`State: Profile` does not accept it. Type the helper's parameter `Drafts.View<Profile>` instead:
+
+```luau
+local function CanAfford(State: Drafts.View<Profile>, Cost: number): boolean
+	return State.Gold >= Cost
 end
 ```
 
-Then join them at the top, translating each slice's answer back into a whole profile:
-
-```luau
-local function Reducer(State: Profile, Op: Ledger.Op): Profile?
-	local OnPets = Pets.Handlers[Op.Kind]
-	if OnPets ~= nil then
-		local Next = OnPets(State.Pets, Op)
-		return if Next == nil then nil else SetPath(State, { "Pets" }, Next)
-	end
-
-	local OnQuests = Quests.Handlers[Op.Kind]
-	if OnQuests ~= nil then
-		local Next = OnQuests(State.Quests, Op)
-		return if Next == nil then nil else SetPath(State, { "Quests" }, Next)
-	end
-
-	return nil
-end
-```
-
-A slice handler only sees its own subtree. It cannot reach across and couple two domains by accident.
-If a kind needs both, handle it at the top.
+`View` is read only, so the helper cannot change the state by mistake.
 
 ## What folding costs
 
 The reducer does not run once per op. It runs once when you `Apply`. It runs again for every op in
-the log, on every read that folds the record. In Studio it runs a third time, when Ledger refolds to
-check the reducer is pure.
+the log, on every read that folds the record. In Studio it runs a third time, when Ledger folds the
+log again to check the reducer is pure.
 
-Work that is O(n) in the size of your state, per op, becomes O(n squared) across a fold. Counting a
-collection to enforce a cap is the usual cause:
+A handler that loops over a table in the state repeats that loop for every op of its kind in the
+log. One fold then costs the number of ops times the size of the table. Counting a collection to
+enforce a cap is the usual cause:
 
 ```luau
 -- every Hatch walks every pet you own
@@ -255,45 +162,42 @@ if Owned >= 200 then
 end
 ```
 
-Keep the count in the state instead and move it with the collection. A log of 128 ops against a
-profile holding 200 pets is 25,600 iterations per fold, on a path that runs on every read.
+A log of 128 ops against a profile holding 200 pets is 25,600 loop steps per fold, on a path that
+runs on every read. Store the count as a field instead, and update it in the handler that adds or
+removes an entry.
 
 ## Keep the result storable
 
-Whatever the reducer returns gets written as JSON. No metatables, no functions, no NaN, no mixing
-array and string keys in one table, no holes in an array.
+Whatever the reducer returns is written as JSON. No metatables, no functions, no NaN, no mixing
+array and string keys in one table, and no gaps in an array.
 
-A hole is easy to make without noticing. The obvious way to remove an item makes one:
-
-```luau
-local Next = table.clone(State)
-Next.Items = table.clone(State.Items)
-Next.Items[Index] = nil     -- leaves a hole
-return Next
-```
-
-Use `table.remove` on the copy, or rebuild the list, so the array stays dense:
+A gap is easy to make by mistake. Setting an array entry to `nil` leaves one:
 
 ```luau
-local Items = table.clone(State.Items)
-table.remove(Items, Index)
-return SetPath(State, { "Items" }, Items)
+Open(State).Items[Index] = nil -- leaves a gap
 ```
 
-Ledger refuses to compact a record whose state it cannot store, and warns with the field name.
+Use `table.remove`, so the array stays dense:
+
+```luau
+table.remove(Open(State).Items, Index)
+```
+
+Ledger will not compact a record whose state it cannot store, and it warns with the field name.
 Nothing is lost. The log keeps growing until you fix it.
 
-## Don't error
+## Refuse with nil, don't throw
 
-Check the op and return `nil`.
+Check the values on the op and return `nil` to refuse:
 
 ```luau
-if type(Op.Amount) ~= "number" then
+if Op.Amount <= 0 then
 	return nil
 end
 ```
 
-A reducer that throws is a bug. Ledger catches it, warns with what was raised, and answers `Refused`. See [check the fields](/docs/concepts/reducer#check-the-fields).
+A handler that throws is a bug. Ledger catches it, warns with the error message, and returns
+`Refused`. See [check the fields](/docs/concepts/reducer#check-the-fields).
 
 ## A worked example
 
@@ -301,11 +205,14 @@ A pet game, with an inventory cap, equip slots, and fusing three pets of the sam
 level higher.
 
 ```luau
+local Drafts = require(ReplicatedStorage.Drafts)
+local Open = Drafts.Open
+
 type Pet = {
 	Species: string,
 	Level: number,
 	Xp: number,
-	Locked: boolean
+	Locked: boolean,
 }
 
 type Profile = {
@@ -315,28 +222,28 @@ type Profile = {
 	Equipped: { [string]: true },
 	Wearing: number,
 	Slots: number,
-	Discovered: { [string]: true }
+	Discovered: { [string]: true },
+}
+
+type Ops = {
+	Hatch: { PetId: string, Species: string },
+	Feed: { PetId: string, Xp: number },
+	Equip: { PetId: string },
+	Sell: { PetId: string },
+	Fuse: { PetIds: { string }, PetId: string },
 }
 
 local MAX_PETS = 200
 local FUSE_COUNT = 3
 local HATCH_COST = 250
 local LEVEL_XP = 100
-```
 
-`Owned` and `Wearing` are counts of `Pets` and `Equipped`. They are stored so no handler has to walk
-either table.
-
-`Fuse` has nine rules to check, so they get names of their own rather than nine `if`s in a row. Each
-one answers a question you could say out loud.
-
-```luau
 local function NewPet(Species: string, Level: number): Pet
 	return { Species = Species, Level = Level, Xp = 0, Locked = false }
 end
 
 -- can this one pet go into a fuse of this species at this level
-local function Fusable(State: Profile, Id: string, Species: string, Level: number): boolean
+local function Fusable(State: Drafts.View<Profile>, Id: string, Species: string, Level: number): boolean
 	local Pet = State.Pets[Id]
 	if Pet == nil then
 		return false
@@ -347,8 +254,8 @@ local function Fusable(State: Profile, Id: string, Species: string, Level: numbe
 	return not Pet.Locked and not State.Equipped[Id]
 end
 
--- do these ids name a legal fuse, and if so what are they all
-local function FuseInput(State: Profile, Ids: { string }): Pet?
+-- do these ids name a legal fuse, and if so which pet are they all
+local function FuseInput(State: Drafts.View<Profile>, Ids: { string }): Pet?
 	local Base = State.Pets[Ids[1]]
 	if Base == nil then
 		return nil
@@ -361,136 +268,115 @@ local function FuseInput(State: Profile, Ids: { string }): Pet?
 		end
 		Counted[Id] = true
 	end
-	return Base
+	return { Species = Base.Species, Level = Base.Level, Xp = Base.Xp, Locked = Base.Locked }
 end
+
+local Kinds: Drafts.Handlers<Profile, Ops> = {
+	Hatch = function(State, Op)
+		if State.Pets[Op.PetId] ~= nil then
+			return nil
+		end
+		if State.Owned >= MAX_PETS or State.Coins < HATCH_COST then
+			return nil
+		end
+
+		State.Coins -= HATCH_COST
+		State.Owned += 1
+		Open(State).Pets[Op.PetId] = NewPet(Op.Species, 1)
+		if State.Discovered[Op.Species] == nil then
+			Open(State).Discovered[Op.Species] = true
+		end
+		return State
+	end,
+
+	Feed = function(State, Op)
+		if Op.Xp <= 0 or State.Pets[Op.PetId] == nil then
+			return nil
+		end
+
+		local Pet = Open(Open(State).Pets)[Op.PetId]
+		local Gained = Pet.Xp + Op.Xp
+		Pet.Xp = Gained % LEVEL_XP
+		Pet.Level += Gained // LEVEL_XP
+		return State
+	end,
+
+	Equip = function(State, Op)
+		if State.Pets[Op.PetId] == nil or State.Equipped[Op.PetId] then
+			return nil
+		end
+		if State.Wearing >= State.Slots then
+			return nil
+		end
+
+		State.Wearing += 1
+		Open(State).Equipped[Op.PetId] = true
+		return State
+	end,
+
+	Sell = function(State, Op)
+		local Pet = State.Pets[Op.PetId]
+		if Pet == nil or Pet.Locked or State.Equipped[Op.PetId] then
+			return nil
+		end
+
+		State.Owned -= 1
+		State.Coins += 50 * Pet.Level
+		Open(State).Pets[Op.PetId] = nil
+		return State
+	end,
+
+	Fuse = function(State, Op)
+		if #Op.PetIds ~= FUSE_COUNT or State.Pets[Op.PetId] ~= nil then
+			return nil
+		end
+
+		local Base = FuseInput(State, Op.PetIds)
+		if Base == nil then
+			return nil
+		end
+
+		local Pets = Open(State).Pets
+		for _, Id in Op.PetIds do
+			Pets[Id] = nil
+		end
+		Pets[Op.PetId] = NewPet(Base.Species, Base.Level + 1)
+		State.Owned -= FUSE_COUNT - 1
+		return State
+	end,
+}
+
+local Store = Ledger.New<<Profile, Ops>>({
+	Name = "Pets",
+	Default = { Coins = 1000, Pets = {}, Owned = 0, Equipped = {}, Wearing = 0, Slots = 3, Discovered = {} },
+	Reducer = Drafts.Reducer<<Profile, Ops>>(Kinds),
+})
 ```
 
-Then the handlers themselves stay short.
+`Owned` and `Wearing` are counts of `Pets` and `Equipped`. They are stored so no handler has to walk
+either table.
 
-```luau
-type Handler = (State: Profile, Op: Ledger.Op) -> Profile?
+Notes on the example:
 
-local Handlers: { [string]: Handler } = {}
+**The fields are `PetId` and `Species`, not `Id` and `Kind`.** `Id` and `Kind` belong to Ledger,
+and `Op.Kind` here is already `"Hatch"`. Name your own fields something else.
 
-function Handlers.Hatch(State: Profile, Op: Ledger.Op): Profile?
-	if type(Op.PetId) ~= "string" or type(Op.Species) ~= "string" then
-		return nil
-	end
-	if State.Pets[Op.PetId] ~= nil then
-		return nil
-	end
-	if State.Owned >= MAX_PETS or State.Coins < HATCH_COST then
-		return nil
-	end
+**The caller picks the id and the random species.** The reducer cannot call `math.random`, so the
+server picks both before the write and puts them on the op.
 
-	local Next = Patch(State, { Coins = State.Coins - HATCH_COST, Owned = State.Owned + 1 })
-	Next = SetPath(Next, { "Pets", Op.PetId }, NewPet(Op.Species, 1))
+**`Counted` in `FuseInput` rejects repeated ids.** Without it, `PetIds = { "a", "a", "a" }` passes
+every other check. The fuse then removes one pet and adds a pet one level higher, so the player
+gets a higher level pet without spending the other two. The removal loop cannot catch it either,
+since removing the same key three times removes it once.
 
-	if State.Discovered[Op.Species] == nil then
-		Next = SetPath(Next, { "Discovered", Op.Species }, true)
-	end
-	return Next
-end
+**`Fusable` and `FuseInput` take `Drafts.View<Profile>`.** They only read, and a handler's state is
+not a `Profile`. See [helpers that read the state](#helpers-that-read-the-state).
 
-function Handlers.Feed(State: Profile, Op: Ledger.Op): Profile?
-	if type(Op.PetId) ~= "string" or type(Op.Xp) ~= "number" or Op.Xp <= 0 then
-		return nil
-	end
+**No handler loops over a table to count it.** `Owned` and `Wearing` change in the same handlers as
+the tables they count, so hatching the two hundredth pet costs the same as the first.
 
-	local Pet = State.Pets[Op.PetId]
-	if Pet == nil then
-		return nil
-	end
-
-	local Gained = Pet.Xp + Op.Xp
-	local Next = SetPath(State, { "Pets", Op.PetId, "Xp" }, Gained % LEVEL_XP)
-	return UpdatePath(Next, { "Pets", Op.PetId, "Level" }, function(Level: number): number
-		return Level + Gained // LEVEL_XP
-	end, 1)
-end
-
-function Handlers.Equip(State: Profile, Op: Ledger.Op): Profile?
-	if type(Op.PetId) ~= "string" then
-		return nil
-	end
-	if State.Pets[Op.PetId] == nil or State.Equipped[Op.PetId] then
-		return nil
-	end
-	if State.Wearing >= State.Slots then
-		return nil
-	end
-
-	local Next = Patch(State, { Wearing = State.Wearing + 1 })
-	return SetPath(Next, { "Equipped", Op.PetId }, true)
-end
-
-function Handlers.Sell(State: Profile, Op: Ledger.Op): Profile?
-	if type(Op.PetId) ~= "string" then
-		return nil
-	end
-
-	local Pet = State.Pets[Op.PetId]
-	if Pet == nil or Pet.Locked or State.Equipped[Op.PetId] then
-		return nil
-	end
-
-	local Next = Patch(State, { Owned = State.Owned - 1, Coins = State.Coins + 50 * Pet.Level })
-	return SetPath(Next, { "Pets", Op.PetId }, nil)
-end
-
-function Handlers.Fuse(State: Profile, Op: Ledger.Op): Profile?
-	if type(Op.PetIds) ~= "table" or #Op.PetIds ~= FUSE_COUNT then
-		return nil
-	end
-	if type(Op.PetId) ~= "string" or State.Pets[Op.PetId] ~= nil then
-		return nil
-	end
-
-	local Base = FuseInput(State, Op.PetIds)
-	if Base == nil then
-		return nil
-	end
-
-	local Next: Profile = State
-	for _, Id in Op.PetIds do
-		Next = SetPath(Next, { "Pets", Id }, nil)
-	end
-	Next = SetPath(Next, { "Pets", Op.PetId }, NewPet(Base.Species, Base.Level + 1))
-
-	return Patch(Next, { Owned = State.Owned - FUSE_COUNT + 1 })
-end
-
-local function Reducer(State: Profile, Op: Ledger.Op): Profile?
-	local Handler = Handlers[Op.Kind]
-	if Handler == nil then
-		return nil
-	end
-	return Handler(State, Op)
-end
-```
-
-Seven things in there need explaining.
-
-**The species is `Op.Species`, and the pet id is `Op.PetId`.** `Id` and `Kind` belong to Ledger, and
-`Op.Kind` here is already `"Hatch"`. Name your own fields something else or Ledger overwrites them
-with a warning.
-
-**The caller picks the id and rolls the species.** The reducer cannot call `math.random`, so both
-arrive on the op. The server rolls, then writes down what it rolled.
-
-**`Counted` in `FuseInput` is the one that matters.** Without it, `PetIds = { "a", "a", "a" }` passes every
-other check. It deletes one pet and hands back one a level higher, which is a duplication exploit.
-The removal loop cannot catch it either, since removing the same key three times removes it once.
-
-**`Fuse` chains `SetPath` down its list.** Each call clones the root and `Pets` again, which is four
-clones for three pets. That is fine here. If you were removing hundreds at once, clone `Pets` once by
-hand and write into that instead.
-
-**Nothing counts anything.** `Owned` and `Wearing` move with the tables they describe, so hatching the
-two hundredth pet costs the same as the first.
-
-**Every refusal is `nil`.** The caller gets `Refused` whether the player was broke, full, or holding a
-locked pet. If you want to tell them which, check before you write:
+**Every refusal is `nil`.** The call returns `Refused` whether the player had too few coins, had no
+free slot, or chose a locked pet. To tell them which, check before you write:
 
 ```luau
 if State.Coins < HATCH_COST then
@@ -501,4 +387,248 @@ end
 Session:Apply("Hatch", { PetId = HttpService:GenerateGUID(false), Species = Roll() })
 ```
 
-The reducer still checks. The check in front is for the message, and the one inside is the rule.
+The reducer still checks. The check before `Apply` only chooses the message. The check in the
+reducer enforces the rule.
+
+## The Drafts module
+
+Copy this into a ModuleScript called `Drafts`, anywhere your reducer can require it.
+
+```luau
+--!strict
+--!optimize 2
+
+--[=[
+
+	Drafts: Writes a reducer as one handler per op kind, on a copy of the state.
+
+	Each handler gets the state with its top level copied, so it can write top level fields and
+	return it. Nested tables stay read only. Open copies one nested table, puts the copy into its
+	parent and returns it writable. A table that is already open is not frozen, so a second Open
+	returns the same copy and keeps the first writes. The handler table has to be an annotated local, or its functions are not typed. View is
+	the state as a helper reads it. A draft is not the state type, since its nested tables are read
+	only, so a helper that only reads takes View.
+
+	Return type: A table with Reducer and Open. The types are Handlers, View, Opener and Op.
+	Example usage:
+		local Kinds: Drafts.Handlers<Profile, Ops> = { AddGold = function(State, Op) ... end }
+		local Reducer = Drafts.Reducer<<Profile, Ops>>(Kinds)
+--]=]
+
+export type function Op(Map: type): type
+	local Arms = {}
+	for Kind, Held in Map:properties() do
+		local Fields = Held.read
+		if Fields == nil then
+			continue
+		end
+		if not Fields:is("table") then
+			error(`op kind '{tostring(Kind)}' has to name the fields it carries, as a table, and it names {tostring(Fields)}`)
+		end
+
+		local Arm = types.copy(Fields)
+		for Name in Fields:properties() do
+			Arm:setwriteproperty(Name, nil)
+		end
+		Arm:setreadproperty(types.singleton("Kind"), Kind)
+		Arm:setreadproperty(types.singleton("Id"), types.string)
+		table.insert(Arms, Arm)
+	end
+
+	if #Arms == 0 then
+		return types.never
+	end
+	if #Arms == 1 then
+		return Arms[1]
+	end
+	return types.unionof(table.unpack(Arms))
+end
+
+export type function View(Shape: type): type
+	local function Frozen(Held: type, Depth: number): type
+		if Depth > 16 then
+			return Held
+		end
+		if Held:is("union") or Held:is("intersection") then
+			local Parts = {}
+			for _, Part in Held:components() do
+				table.insert(Parts, Frozen(Part, Depth + 1))
+			end
+			return if Held:is("union") then types.unionof(table.unpack(Parts)) else types.intersectionof(table.unpack(Parts))
+		end
+		if not Held:is("table") then
+			return Held
+		end
+
+		local Out = types.newtable(nil, nil, Held:metatable())
+		for Name, Field in Held:properties() do
+			if Field.read ~= nil then
+				Out:setreadproperty(Name, Frozen(Field.read, Depth + 1))
+			end
+		end
+		local Indexer = Held:readindexer()
+		if Indexer ~= nil then
+			Out:setindexer(Indexer.index, Frozen(Indexer.result, Depth + 1))
+		end
+		return Out
+	end
+
+	return Frozen(Shape, 0)
+end
+
+export type function Handlers(Shape: type, Map: type): type
+	local function Frozen(Held: type, Depth: number): type
+		if Depth > 16 then
+			return Held
+		end
+		if Held:is("union") or Held:is("intersection") then
+			local Parts = {}
+			for _, Part in Held:components() do
+				table.insert(Parts, Frozen(Part, Depth + 1))
+			end
+			return if Held:is("union") then types.unionof(table.unpack(Parts)) else types.intersectionof(table.unpack(Parts))
+		end
+		if not Held:is("table") then
+			return Held
+		end
+
+		local Out = types.newtable(nil, nil, Held:metatable())
+		for Name, Field in Held:properties() do
+			if Field.read ~= nil then
+				Out:setreadproperty(Name, Frozen(Field.read, Depth + 1))
+			end
+		end
+		local Indexer = Held:readindexer()
+		if Indexer ~= nil then
+			Out:setindexer(Indexer.index, Frozen(Indexer.result, Depth + 1))
+		end
+		return Out
+	end
+
+	if not Shape:is("table") then
+		error(`a draft needs a table state, and this one is {tostring(Shape)}`)
+	end
+
+	local Draft = types.newtable(nil, nil, Shape:metatable())
+	for Name, Field in Shape:properties() do
+		if Field.read ~= nil then
+			Draft:setproperty(Name, Frozen(Field.read, 1))
+		end
+	end
+	local Indexer = Shape:readindexer()
+	if Indexer ~= nil then
+		Draft:setindexer(Indexer.index, Frozen(Indexer.result, 1))
+	end
+	local Gives = types.optional(Frozen(Shape, 0))
+
+	local Out = types.newtable()
+	for Kind, Held in Map:properties() do
+		local Fields = Held.read
+		if Fields == nil then
+			continue
+		end
+		if not Fields:is("table") then
+			error(`op kind '{tostring(Kind)}' has to name the fields it carries, as a table, and it names {tostring(Fields)}`)
+		end
+
+		local Arm = types.copy(Fields)
+		for Name in Fields:properties() do
+			Arm:setwriteproperty(Name, nil)
+		end
+		Arm:setreadproperty(types.singleton("Kind"), Kind)
+		Arm:setreadproperty(types.singleton("Id"), types.string)
+		Out:setreadproperty(Kind, types.newfunction({ head = { Draft, Arm } }, { head = { Gives } }))
+	end
+	return Out
+end
+
+export type function Opener(Parent: type): type
+	local function Open(Held: type): type?
+		if Held:is("union") then
+			local Parts = {}
+			for _, Part in Held:components() do
+				local Opened = Open(Part)
+				if Opened ~= nil then
+					table.insert(Parts, Opened)
+				elseif Part:is("nil") then
+					table.insert(Parts, Part)
+				else
+					return nil
+				end
+			end
+			return types.unionof(table.unpack(Parts))
+		end
+		if not Held:is("table") then
+			return nil
+		end
+
+		local Out = types.newtable(nil, nil, Held:metatable())
+		for Name, Inner in Held:properties() do
+			if Inner.read ~= nil then
+				Out:setproperty(Name, Inner.read)
+			end
+		end
+		local Indexer = Held:readindexer()
+		if Indexer ~= nil then
+			Out:setindexer(Indexer.index, Indexer.result)
+		end
+		return Out
+	end
+
+	local Out = types.newtable()
+	if not Parent:is("table") then
+		return Out
+	end
+	for Name, Field in Parent:properties() do
+		if Field.read ~= nil and Field.write ~= nil then
+			local Opened = Open(Field.read)
+			if Opened ~= nil then
+				Out:setreadproperty(Name, Opened)
+			end
+		end
+	end
+	local Indexer = Parent:readindexer()
+	if Indexer ~= nil then
+		local Opened = Open(Indexer.result)
+		if Opened ~= nil then
+			Out:setindexer(Indexer.index, Opened)
+		end
+	end
+	return Out
+end
+
+type Handler = (State: any, Op: any) -> any
+
+local function Reducer<D, O>(Kinds: Handlers<D, O>): (State: D, Op: Op<O>) -> D?
+	local Held: { [string]: Handler } = Kinds :: any
+
+	return function(State: D, Given: Op<O>): D?
+		local Handle = Held[(Given :: any).Kind]
+		if Handle == nil then
+			return nil
+		end
+		return Handle(table.clone(State :: any), Given)
+	end
+end
+
+local function Open<T>(Parent: T): Opener<T>
+	local Plain: { [any]: any } = Parent :: any
+
+	return setmetatable({}, {
+		__index = function(_, Key: any): any
+			local Current = Plain[Key]
+			if type(Current) ~= "table" or not table.isfrozen(Current) then
+				return Current
+			end
+			local Inner = table.clone(Current)
+			Plain[Key] = Inner
+			return Inner
+		end,
+	}) :: any
+end
+
+return table.freeze({
+	Reducer = Reducer,
+	Open = Open,
+})
+```

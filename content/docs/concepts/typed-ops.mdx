@@ -1,17 +1,16 @@
 ---
 title: Typed ops
-description: Name what each op carries and the checker holds every write against it.
+description: List each kind of op and its fields, and every write is checked against that list.
 ---
 
-An op is `{ Id, Kind, ...whatever you passed }`. Ledger can't know which fields a kind carries, so
-`Op.Amount` reads as `unknown` in strict mode and a misspelled `Kind` is a refusal you find while
-playing.
+An op is a kind plus the fields you pass with it. Write down which kinds your game uses and which
+fields each one carries, give that list to `Ledger.New`, and every write is checked against it. A
+misspelled kind or a field of the wrong type is a type error where you wrote it, not a refusal you
+find at runtime.
 
-Name your ops and both of those become build errors.
+## Declaring your ops
 
-## Naming them
-
-A map of the kind to the fields that kind carries:
+`Ops` maps each kind to the fields it carries:
 
 ```luau
 export type Profile = {
@@ -24,44 +23,65 @@ export type Ops = {
 	Sell: { Item: string },
 	AddGold: { Amount: number },
 }
-```
 
-Then build the store with `Ledger.NewTyped` and hand it both:
-
-```luau
-local Store = Ledger.NewTyped<<Profile, Ops>>({
+local Store = Ledger.New<<Profile, Ops>>({
 	Name = "PlayerData",
 	Default = { Gold = 100, Items = {} },
 	Reducer = Reducer,
 })
 ```
 
+A kind with no fields takes an empty table:
+
+```luau
+export type Ops = {
+	Prestige: {},
+}
+
+Session:Apply("Prestige", {})
+```
+
 ## What gets checked
+
+Every write that names a kind:
 
 ```luau
 Session:Apply("Buy", { Item = "Sword" }) -- fine
 Session:Apply("Byu", { Item = "Sword" }) -- no kind by that name
-Session:Apply("Buy", { Item = 42 })      -- Item is a string
+Session:Apply("Buy", { Item = 42 })      -- Item has to be a string
 Session:Apply("Buy", { Amount = 5 })     -- those are AddGold's fields
 ```
 
-A call that matches no kind lists the ones that do. The error names every op your store writes.
+The error lists every kind the store has, with its fields. `Commit`, `Edit`, `Confirm`, `CommitOp`
+and `EditOp` are checked the same way.
 
-`Session:Commit` and `Store:Edit` take the same check. `Edit` has the key first.
-
-A field your kind doesn't name rides along rather than failing. That's what keeps `Once` working:
+Extra fields are allowed when every declared field is present. That is how `Once` sits beside your
+own fields:
 
 ```luau
 Session:Apply("Buy", { Item = "Sword", Once = "order1" })
 ```
 
-So a misspelled field is caught when it means the real one is missing, which is the usual way you
-make that mistake, and a spare field next to a complete set is not.
+`IdAt` sits there the same way on `Confirm`, `CommitOp` and `EditOp`. On `Apply`, `Commit` and
+`Edit` the check lets it through, and Ledger drops it with a warning, since those calls make a new
+id every time.
 
-## The reducer
+So a misspelled field is caught only because the correctly spelled field is then missing. The
+misspelled field itself is allowed as an extra.
 
-`Ledger.Op<Ops>` is the op as one of your kinds. Testing `Op.Kind` narrows to that kind, and its
-fields come out typed:
+The field names you pass to `Reserve`, `Holds`, `Transfer`, `Bump` and `Total` are checked too.
+They have to name a number field of your state:
+
+```luau
+Store:Reserve(UserId, "Gold", 1, "order1") -- fine
+Store:Reserve(UserId, "Glod", 1, "order1") -- no field by that name
+Store:Reserve(UserId, "Items", 1, "order1") -- Items isn't a number
+```
+
+## In the reducer
+
+Type the op as `Ledger.Op<Ops>`. Testing `Op.Kind` narrows it to that kind, and its fields have
+their types:
 
 ```luau
 local function Reducer(State: Profile, Op: Ledger.Op<Ops>): Profile?
@@ -86,99 +106,55 @@ local function Reducer(State: Profile, Op: Ledger.Op<Ops>): Profile?
 end
 ```
 
-`Op.Item` is a string and `Op.Amount` is a number. There's no `type(Op.Amount) == "number"` and no
-`Op.Item :: string` anywhere. Reading a field off the wrong kind is an error where you read it:
+`Op.Item` is a string and `Op.Amount` is a number, with no `type()` checks and no casts. These are
+type errors:
 
 ```luau
 if Op.Kind == "Buy" then
-	return Op.Amount -- Key 'Amount' not found in { Id: string, Item: string, Kind: "Buy" }
+	print(Op.Amount) -- Key 'Amount' not found in table '{ read Id: string, read Item: string, read Kind: "Buy" }'
+	Op.Item = "Shield" -- Property Item of table '{ read Id: string, read Item: string, read Kind: "Buy" }' is read-only
 end
 ```
 
-An op is there to be read, so its fields are read only and writing one stops the build:
+Annotate the reducer's return as `Profile?`, as above, and it has to return your state or `nil`. A
+reducer written inline in the config, with no return annotation, is not checked for that.
+
+The state you are given is frozen. Writing into it throws at runtime, and the op is
+[`Refused`](/docs/concepts/reasons). Annotate the state as `Ledger.Frozen<Profile>` to make that a
+type error too:
 
 ```luau
-Op.Item = "Shield" -- Property Item of table '{ read Id: string, read Item: string, read Kind: "Buy" }' is read-only
-```
-
-Nothing reads an op after your reducer has it, so a write was only ever going to be lost. The state
-you are handed is frozen for the same reason, except that one shows up while you play, as a
-[`Refused`](/docs/concepts/reasons) op rather than an error where you wrote it.
-
-To move that to the build as well, annotate the state with `Ledger.Frozen`. The op stays unannotated
-and still narrows:
-
-```luau
-type Hero = { Gold: number, Stats: { Level: number } }
-
-Reducer = function(State: Ledger.Frozen<Hero>, Op)
-	if Op.Kind == "LevelUp" then
-		local Next = table.clone(State)
-		Next.Stats.Level += 1 -- Property Level of table '{ read Level: number }' is read-only
-		return Next
+Reducer = function(State: Ledger.Frozen<Profile>, Op)
+	if Op.Kind == "AddGold" then
+		State.Gold += Op.Amount -- Property Gold of table '{ read Gold: number, read Items: { [string]: boolean } }' is read-only
 	end
 	return nil
 end,
 ```
 
-`table.clone` keeps the read only types, so a clone is still read only one level down. That is how
-it behaves at runtime too. Give each level you change its own clone, and cast it to the shape you
-write:
+Arrays and maps stay writable in the type, because Luau can't mark a table's entries read only yet.
+A write into one still throws at runtime.
 
-```luau
-local Next = table.clone(State) :: Hero
-local Stats = table.clone(State.Stats) :: { Level: number }
-Stats.Level += 1
-Next.Stats = Stats
-return Next
-```
+For a reducer with deep state or many kinds, [Advanced reducers](/docs/concepts/advanced-reducers)
+has a table of handlers, one per kind, and an `Open` that makes nested state writable.
 
-Arrays and maps stay writable in the type, and so does what they hold, because Luau can't make an
-indexer read only yet. A write into one still throws while you play.
+Fields an older version of your game wrote are not checked again when they are read back. See
+[check the fields](/docs/concepts/reducer#check-the-fields).
 
-## An op with no fields
+## A store without types
 
-A kind takes its fields whether or not it has any:
+`Ledger.New(Options)`, without `<<Profile, Ops>>`, builds a store that takes any kind with any
+fields. The reducer gets `Ledger.Op`, where every field is `unknown`, so it has to check each field's
+type before it uses it. That suits a store whose ops are still changing.
 
-```luau
-export type Ops = {
-	Prestige: {},
-}
+Adding the types later changes no call site, since both take the kind and the fields as two
+arguments. Nothing changes at runtime either.
 
-Session:Apply("Prestige", {})
-```
+## Naming the store and session types
 
-## Your state gets checked too
-
-The `Field` argument to `Reserve`, `Bump` and `Total` has to name a number field on your state:
-
-```luau
-Store:Reserve(UserId, "Gold", 1, "order1") -- fine
-Store:Reserve(UserId, "Glod", 1, "order1") -- no field by that name
-Store:Reserve(UserId, "Name", 1, "order1") -- Name isn't a number
-```
-
-That threw at the call before. Now it doesn't build.
-
-Your reducer is held to giving back your state or `nil` as well, so one that hands back something
-else stops building instead of having its answer thrown away at runtime.
-
-## What doesn't change
-
-Everything else on the store. `Peek`, `Transfer`, `Reserve`, `Tx` and the rest keep the signatures
-they have on an untyped store, and a typed store loads, folds, saves and recovers through the same
-code. Nothing about it differs at runtime.
-
-The call shape doesn't change either. Both views take the kind and the fields as two arguments, so
-moving a store to `NewTyped` doesn't touch a call site.
-
-`Ledger.New` is unchanged. A store built with it takes any kind with any fields. That's what you
-want while the ops are still moving around, and naming them is something you do when you want it.
-
-## Types
-
-`Ledger.TypedStore<D, O>` and `Ledger.TypedSession<S, O>` name the two views, the same way
-`Ledger.Store<D>` and `Ledger.Session<S>` name the open ones.
+`Ledger.TypedStore<Profile, Ops>` and `Ledger.TypedSession<Profile, Ops>` are the types of a typed
+store and its sessions, the way `Ledger.Store<Profile>` and `Ledger.Session<Profile>` are for a store
+without types:
 
 ```luau
 local function Buy(Session: Ledger.TypedSession<Profile, Ops>, Item: string)

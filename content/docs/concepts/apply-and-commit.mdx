@@ -1,15 +1,15 @@
 ---
 title: Apply and Commit
-description: One is instant and local, the other is durable before it answers.
+description: One is instant and local, the other is durable before it returns.
 ---
 
-Both of them write an op. The difference is when you find out it stuck.
+Both of them write an op. The difference is when you know the op is saved.
 
 | | `Apply` | `Commit` |
 | --- | --- | --- |
-| Gives you | `(boolean, Reason?)` | `Future<boolean, Reason?>` |
+| Returns | `(boolean, Reason?)` | `Future<boolean, Reason?>` |
 | Yields | no | yes, on `:Wait()` |
-| Durable when it answers | no | yes |
+| Durable when it returns | no | yes |
 | Costs a datastore request | no | yes |
 | Sees other servers' writes | no | yes |
 
@@ -26,24 +26,24 @@ local Ok, Why = Session:Apply("SpendGold", { Amount = 25 })
 Use it by default, for whatever the player is doing right now. Spending, picking things up,
 progression, stats.
 
-The answer is local. It knows what this server has, and not what another server appended a second
-ago. Normally a player writes from one server only, so that's fine.
+The result is local. It knows what this server has, and not what another server appended a second
+ago. Usually only one server writes to a player's key, so this rarely matters.
 
-### When the answer changes under you
+### When the result changes later
 
 `Apply` returns `true` straight away, and the op only reaches the log on the next save. If another
-server wrote to that key in between, the fold can refuse your op when it finally lands, after you
+server wrote to that key in between, the fold can refuse your op when it is saved, after you
 already told the player it worked.
 
-You only see it when two different ops compete for the same rule. The same op twice looks fine, since
-both servers reach the same number either way. Two different ops don't:
+This only happens when an op from each server passes the reducer's check alone, but not both
+together. Two spends that together exceed the balance are the usual case:
 
 ```luau
 -- 100 gold. server A spends 80, server B spends 30, neither knows about the other
 A:Apply("SpendGold", { Amount = 80 })   -- A shows 20
 B:Apply("SpendGold", { Amount = 30 })   -- B shows 70
 
--- both ops reach the log. A's lands first, so B's would take the balance negative
+-- both ops reach the log. A's is saved first, so B's would take the balance negative
 -- and the reducer refuses it. B's player watches 70 become 20
 ```
 
@@ -57,7 +57,7 @@ waiting.
 ## Commit
 
 `Commit` pushes everything queued, appends the op, waits for the datastore to take it, refolds from
-what came back, and only then answers.
+what came back, and only then returns.
 
 ```luau
 local Ok, Why = Session:Commit("GrantReward", { Item = "Sword" }):Wait()
@@ -66,13 +66,13 @@ if Ok then
 end
 ```
 
-Use it when you're about to do something you can't take back. Handing out a purchase, calling a
+Use it when you're about to do something you can't take back. Giving out a purchase, calling a
 webhook, telling another service the thing happened. `true` means the op is in the log, your reducer
 took it, and every server will agree from here on.
 
-The fold runs against the real record, so `Commit` sees other servers' writes. A stuck
-[transaction](/docs/guides/transactions) leg on the key can still change the answer afterwards. When
-that is possible, `Commit` says [`Unresolved`](/docs/concepts/reasons).
+The fold runs against the real record, so `Commit` sees other servers' writes. A parked
+[transaction](/docs/guides/transactions) leg on the key can still change the result afterwards. When
+that is possible, `Commit` returns [`Unresolved`](/docs/concepts/reasons).
 
 ## CommitOp
 
@@ -91,17 +91,17 @@ local Ok, Why = Session:CommitOp({
 `Id` and `Kind` are required. `Once` is optional, and it makes the op apply at most one time on that
 key. See [Once](/docs/concepts/once).
 
-## Which one
+## Which one to use
 
 Apply for gameplay, Commit for side effects.
 
-If the player wouldn't notice a rollback, `Apply`. If someone would file a ticket about it,
-`Commit`.
+If the player would not notice a rollback, use `Apply`. If a rollback would make the player report
+a problem, use `Commit`.
 
 ## Flush
 
 `Session:Flush()` pushes queued ops without adding one. Autosave calls it. You rarely need it
-yourself, but it's there for the moment before you do something risky:
+yourself. Call it when the queued ops must be saved before your next step:
 
 ```luau
 Session:Flush():Wait()
@@ -109,8 +109,9 @@ Session:Flush():Wait()
 
 ## Many ops, one request
 
-A flush writes the whole queue in one request. The number of ops does not change this. Use it when
-one action of a player must change more than one part of their data.
+A flush writes the whole queue in one request. The number of ops does not change this. When one
+action of a player must change more than one part of their data, queue each op with `Apply` and
+flush once.
 
 | call | requests |
 | --- | --- |
@@ -125,9 +126,9 @@ Session:Apply("Sword")
 Session:Flush():Wait()
 ```
 
-Two ops, and one request. Three `Commit` calls cost three requests. Each `Commit` is durable before
-it answers. A `Commit` also writes the queued ops first, if there are any.
+Two ops, and one request. Two `Commit` calls would cost two requests. Each `Commit` is saved before
+it returns. A `Commit` also writes the queued ops first, if there are any.
 
-The ops go in together. Each op is still folded on its own. If the reducer refuses one op, the
-other ops stay applied. Write one op when a grant must be all or nothing. Let the reducer make each
-change for that one op. One op cannot apply in part.
+The ops are saved in one request, but each op is folded on its own. If the reducer refuses one op,
+the other ops stay applied. When a grant must be all or nothing, make it one op, and let its reducer
+branch make every change. One op applies in full or not at all.

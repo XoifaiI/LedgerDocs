@@ -7,16 +7,17 @@ description: The one function you own, and the rules it has to keep.
 type Reducer<S> = (State: S, Op: Op) -> S?
 ```
 
-The reducer takes the state and one op, and gives back the next state or `nil` to refuse. It's the
+The reducer takes the state and one op, and returns the next state or `nil` to refuse. It's the
 only place in your game that decides whether a change is allowed.
 
 ```luau
-local function Reducer(State: Profile, Op: Ledger.Op): Profile?
+export type Ops = {
+	SpendGold: { Amount: number },
+}
+
+local function Reducer(State: Profile, Op: Ledger.Op<Ops>): Profile?
 	if Op.Kind == "SpendGold" then
-		if type(Op.Amount) ~= "number" or Op.Amount <= 0 then
-			return nil
-		end
-		if Op.Amount > State.Gold then
+		if Op.Amount <= 0 or Op.Amount > State.Gold then
 			return nil
 		end
 
@@ -31,8 +32,8 @@ end
 
 ## It has to be pure
 
-The same `(State, Op)` has to give the same answer on every server, forever. No `os.time()`, no
-`math.random()`, no `game`, no upvalues that move, no reading someone else's data. If you need the
+The same `(State, Op)` has to give the same result on every server, forever. No `os.time()`, no
+`math.random()`, no `game`, no upvalues that change, no reading someone else's data. If you need the
 time or a dice roll, work it out at the call site and put it on the op:
 
 ```luau
@@ -40,15 +41,15 @@ Session:Apply("DailyBonus", { At = os.time(), Roll = math.random(1, 6) })
 ```
 
 A log gets folded on two servers at two different moments. If the reducer reads the clock, those two
-folds disagree and your data quietly splits in half.
+folds disagree, and different servers hold different data with no error.
 
 <Callout type="warn">
   In Studio, Ledger refolds the log after every commit and compares it against live state. If they
-  don't match it warns and names the field that moved. That check doesn't run in production, so
-  fix what it points at rather than shipping around it.
+  don't match it warns and names the field that changed. That check doesn't run in production, so
+  fix the field it names before you ship.
 </Callout>
 
-## It has to not mutate
+## It must not mutate the state
 
 Return a new table. `table.clone` is shallow, so clone each nested table you touch:
 
@@ -59,25 +60,26 @@ Next.Gamepasses[Pass] = true
 return Next
 ```
 
-The state you get handed is deep frozen, so a mutation throws on the line that did it instead of
+The state you are given is deep frozen, so a mutation throws on the line that did it instead of
 corrupting a fold somewhere later.
 
-Cloning by hand stops reading well about three levels down. [Advanced
-reducers](/docs/concepts/advanced-reducers) has a `SetPath` that clones only the path you name.
+Cloning by hand gets hard to read a few levels down. [Advanced
+reducers](/docs/concepts/advanced-reducers#changing-nested-state) has an `Open` that copies only
+the tables you change.
 
 Freezing can't cover a buffer, because Luau has no way to freeze one. State can hold buffers, and
 Ledger copies them instead of sharing them, so writing into one can't reach another server or another
-session. It does still change the state you're holding, and the fold won't agree with itself
-afterwards. Build a new buffer instead of writing into the one you were given.
+session. It does still change the state you're holding, and a later fold of the same log gives a
+different result. Build a new buffer instead of writing into the one you were given.
 
-A buffer in `Default` works, and each key gets its own copy. Ledger used to hand every key that had
+A buffer in `Default` works, and each key gets its own copy. Ledger used to give every key that had
 not stored one yet the same buffer, so one key writing into it changed what all of them read.
 
-Don't freeze what you hand back. Ledger freezes it for you, all the way down. A table you froze
-yourself carries no promise about the tables inside it, so Ledger has to walk it in full, which costs
-more than letting Ledger do the freezing.
+Don't freeze what you return. Ledger freezes it for you, all the way down. Ledger only skips the
+tables it froze itself. It checks every table inside a table you froze, which costs more than
+letting Ledger do the freezing.
 
-## It has to not yield
+## It must not yield
 
 No `task.wait`, no `:Wait()`, no yielding datastore calls. Ledger runs the reducer inside a guard
 that errors if it yields.
@@ -88,15 +90,15 @@ Anything else is a bug. Ledger refuses the op with [`Invalid`](/docs/concepts/re
 
 ## Leave the reserved fields alone
 
-`table.clone(State)` carries `_Received` and `_Held` across for free, so most reducers never think
-about them.
+`table.clone(State)` carries `_Received` and `_Held` across, so most reducers never need to handle
+them.
 
 If you build the next state from scratch and drop them, Ledger puts them back, so you can't lose the
-applied id set that way. It won't always catch you writing your own values into them. A store with a
+applied names that way. It does not always detect your own values written into them. A store with a
 `Balance` overwrites those, but a store without one keeps a hand built `_Received`, and that breaks
 the dedupe.
 
-So don't drop them, and don't write to them. Read them if you want, they're just data.
+So don't drop them, and don't write to them. You can read them. They are plain data.
 
 ## Ops you don't know
 
@@ -105,13 +107,13 @@ has never heard of `NewFeatureOp` refuses it instead of guessing at it. This doe
 kind safe during a rolling deploy. A new kind that changes a field that other kinds read needs a
 migration. See [changing the reducer](/docs/guides/migrations#changing-the-reducer).
 
-Ledger checks this when the store is built. It hands the reducer a kind nothing knows. A reducer
-that returns a state for it gets a warning at `New`. Every unknown op on that store counts as
-applied until the reducer is fixed.
+Ledger checks this when the store is built. It calls the reducer with an op of a kind your game
+never uses. A reducer that returns a state for it gets a warning at `New`. Every unknown op on that
+store counts as applied until the reducer is fixed.
 
-That's a kind you don't know yet. A kind you've deleted is the other way round, because nothing is
-ever going to accept it, and refusing one of those stops the key compacting for good. See [changing
-the reducer](/docs/guides/migrations#changing-the-reducer).
+That covers a kind you don't know yet. A kind you have deleted is different. No build will ever
+accept it, and refusing one of those stops the key compacting permanently. See [changing the
+reducer](/docs/guides/migrations#changing-the-reducer).
 
 ## What Studio checks at every save
 
@@ -120,33 +122,37 @@ hold gets a warning that names the field. An array with a gap, a table that mixe
 keys, and a `nan` are the usual causes. A table keyed by `UserId` is an array with gaps. Key it by
 `tostring(UserId)` instead.
 
-Live servers skip the check. A key in that state keeps taking writes and stops compacting, and the
-compaction says so.
+Live servers skip the check. A key in that state keeps taking writes and stops compacting, and
+Ledger warns each time it tries to compact the key.
 
 ## Check the fields
 
-Ops come from your own code, but they also come back out of a datastore that's been holding them for
-weeks, possibly written by a version of your game that doesn't exist anymore. Check the types on the
-way in. A reducer that does `State.Gold -= Op.Amount` without checking `Op.Amount` is a number will
-happily hand you `nil` gold and take the profile with it.
+With your ops named, every write your game makes is checked against `Ops`, so the reducer can read
+`Op.Amount` as a number. See [Typed ops](/docs/concepts/typed-ops).
 
-Naming your ops does that checking for you. `Ledger.NewTyped` takes a map of the kind to the fields
-it carries, and then `Op.Amount` is a number inside the branch that handles it. See [Typed
-ops](/docs/concepts/typed-ops).
+That check is a type check, so it only covers the code you write. Ops read back from the datastore
+are not checked again. An op that an older version of your game wrote before a field changed type
+reaches the reducer with the old type. Maths or a comparison on the wrong type throws, and Ledger
+refuses an op whose reducer throws. A field you only store, like an item name, goes into the state
+as it is. If an older version wrote that kind with a different type, keep a `type()` check on that
+field.
+
+A store built without `Ops` gives the reducer `Ledger.Op`, where every field is `unknown`. Check the
+type of each field before you use it.
 
 ## Coming from Rodux or Redux
 
-The shape is close enough that people reach for it straight away. An op is an action, `Op.Kind` is
-`action.type`, and a handler table keyed by kind reads a lot nicer than a long `if` chain.
+The shape is similar. An op is an action, `Op.Kind` is `action.type`, and a handler table keyed by
+kind is easier to read than a long `if` chain.
 
-That part is fine. Two of the conventions are backwards here though, and both of them cost you money
-rather than throwing.
+Two Redux conventions are reversed in Ledger. Getting either one wrong can lose a purchase, and
+nothing raises an error.
 
 ### nil means refused, not unhandled
 
 In Redux the default case returns the state unchanged, and returning nothing is an error. Here it's
 the other way round. Ledger reads any table you return as accepted, including the exact state you
-were handed. Returning `nil` is the only way to refuse.
+were given. Returning `nil` is the only way to refuse.
 
 So a Redux style default case accepts every op you never wrote a handler for:
 
@@ -162,9 +168,10 @@ end
 ```
 
 That isn't a harmless no-op. An op carrying a [`Once`](/docs/concepts/once) name gets that name
-written into the applied set the moment your reducer hands back a table, so the receipt is marked
-granted while nothing was granted. `DidApply` says true, the retry never comes, and the player is
-out the Robux. A transaction leg does the same thing and commits on a key that did nothing.
+written into the applied names as soon as your reducer returns a table, so the receipt is marked
+granted while nothing was granted. `DidApply` returns `true`, Roblox stops retrying, and the player
+paid Robux for nothing. A transaction leg is also marked as committed on that key, although nothing
+changed.
 
 The fix is one word:
 
@@ -186,9 +193,8 @@ Every handler in the table returns `nil` to refuse too, same as it would inline.
 returns a table, which here means it always accepts. A slice that wanted to refuse has no way to say
 so, because the combined result is a table either way.
 
-It's worse than losing the refusal. In Lua, a slice returning `nil` assigns `nil` into the combined
-table, which deletes that key. So the refusal doesn't just get swallowed, it takes the field with
-it.
+In Lua, a slice that returns `nil` also assigns `nil` into the combined table, which deletes that
+key. So the refusal is lost, and the field is deleted as well.
 
 Route by kind instead and let `nil` come straight back up:
 
@@ -223,16 +229,17 @@ end
 Each handler still owns one field, which is what you wanted `combineReducers` for. It just returns
 the whole state rather than a slice of it, so a refusal is still a refusal.
 
-### The rest of Rodux doesn't come with it
+### What Ledger does instead of the rest of Rodux
 
 Don't build a `Rodux.Store`. Ledger is the store, state lives in the log, and `Session:Observe()` is
-your subscribe. Two stores holding the same data is how they drift apart.
+your subscribe. If two stores hold the same data, they get out of sync.
 
 No middleware and no thunks. The reducer can't yield, so anything async happens before you call
-`Apply` or `Commit`, and the result rides in on the op.
+`Apply` or `Commit`, and you put its result on the op.
 
-No Immer style drafts either. State is deep frozen, so mutating it throws on the line that did it.
-Clone what you touch.
+Ledger has no built in Immer style drafts. State is deep frozen, so mutating it throws on the line
+that did it. Clone what you change, or copy the `Drafts` module from
+[Advanced reducers](/docs/concepts/advanced-reducers#changing-nested-state).
 
 One convention does carry over cleanly. Redux asks you to keep actions serializable by convention.
 Ledger enforces it, because ops go in a datastore, and an op that isn't JSON is refused with
@@ -241,6 +248,6 @@ Ledger enforces it, because ops go in a datastore, and an op that isn't JSON is 
 ## Balance and transactions
 
 If the store names a `Balance` field, Ledger wraps your reducer with the transfer ops
-(`__TransferReserve`, `__TransferDeliver` and the rest) before it ever reaches you. You never handle
-those kinds and you'll never see them in your `if` chain. Same goes for transaction bookkeeping and
-`Store:Reset`.
+(`__TransferReserve`, `__TransferDeliver` and the rest). Your reducer never receives those kinds, so
+they never reach your `if` chain. The same is true for the ops that transaction bookkeeping and
+`Store:Reset` write.

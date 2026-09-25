@@ -10,11 +10,12 @@ local Ledger = require(ServerStorage.Ledger)
 ## Ledger.New
 
 ```luau
-Ledger.New<D>(Options: Config<D>) -> Store<D>
+Ledger.New<D, O>(Options: TypedConfig<D, O>) -> TypedStore<D, O>
 ```
 
-Builds a store. Throws on anything wrong with the options, at build time, rather than letting it
-misbehave later.
+Builds a store. Throws when you call it if any option is invalid. Call it as `Ledger.New(Options)`
+for a store that takes any op, or as `Ledger.New<<Profile, Ops>>(Options)` for one that checks
+every write against your ops. See [Typed stores](#typed-stores).
 
 | Option | Type | |
 | --- | --- | --- |
@@ -23,11 +24,11 @@ misbehave later.
 | `Default` | `D` | Required. The fresh state table. |
 | `Balance` | `string?` | Names a number field for [transfers](/docs/guides/transfers). |
 | `Migrations` | `{ Migration }?` | See [Migrations](/docs/guides/migrations). |
-| `Keys` | `"Player" \| "String"` | Defaults to `"Player"`. |
+| `Keys` | `"Player" \| "String"` | `"Player"` keys by UserId, `"String"` by any string. Defaults to `"Player"`. |
 | `Shards` | `number?` | How many keys a total is spread over, 1 to 99. Defaults to 16. Only ever raise it. See [Bump](/docs/reference/store#bump). |
-| `BumpEvery` | `number?` | Seconds between the writes of queued bumps, up to 60. Leave it out and every `Bump` is one write. See [Bump](/docs/reference/store#bump). |
+| `BumpEvery` | `number?` | How often queued bumps are written, in seconds, up to 60. Leave it out and every `Bump` is one write. See [Bump](/docs/reference/store#bump). |
 | `OnLoadFailed` | `((Player, Reason) -> boolean)?` | What to do when a load fails. See below. |
-| `Mock` | `boolean \| { Players: number?, CCU: number?, Throttled: boolean? }` | Puts this store on an in memory datastore, sized how you ask. See [Testing](/docs/guides/testing). |
+| `Mock` | `boolean \| { Players: number?, CCU: number?, Throttled: boolean? }` | Puts this store on an in memory datastore, with the player count, CCU and throttling you give. See [Testing](/docs/guides/testing). |
 
 The name caps at 47 rather than the datastore's 50 because Ledger also creates `<Name>_Tx` for
 transaction markers.
@@ -41,8 +42,8 @@ one.
 ### OnLoadFailed
 
 A load that fails kicks the player with "Your data failed to load, please rejoin". `OnLoadFailed`
-takes that decision instead. It gets the player and the [reason](/docs/concepts/reasons), and returns
-whether it dealt with them. `true` and Ledger leaves them alone, `false` and it kicks.
+replaces that kick. It receives the player and the [reason](/docs/concepts/reasons). Return `true`
+if you handled the player, and Ledger does nothing more. Return `false` and Ledger kicks them.
 
 ```luau
 local Store = Ledger.New({
@@ -60,24 +61,21 @@ local Store = Ledger.New({
 })
 ```
 
-`Behind` means a newer build wrote the record, so a rejoin puts them on the same old server and fails
-again. `Unresolved` is usually a datastore outage, where a rejoin is the right answer.
+`Behind` means a newer build wrote the record. A rejoin can put the player on an old server again,
+and the load fails again. `Unresolved` is usually a datastore outage, where rejoining is the right
+fix.
 
-It can yield, so a teleport works. Anything waiting in `WaitForLoaded` is released before it runs.
+It can yield, so a teleport works. Every `WaitForLoaded` call for that player returns `nil` before
+`OnLoadFailed` runs.
 
 If it throws, Ledger warns and kicks. If it returns `true` and the player is still in the server with
 no data, Ledger warns about that too.
 
-Only for `Keys = "Player"` stores. Passing it on a `Keys = "String"` store throws at build time.
+Only for `Keys = "Player"` stores. Passing it to a string keyed store makes `Ledger.New` throw.
 
-## Ledger.NewTyped
+### Typed stores
 
-```luau
-Ledger.NewTyped<D, O>(Options: TypedConfig<D, O>) -> TypedStore<D, O>
-```
-
-Builds a store that knows what its ops carry. `D` is your state and `O` is a map of the kind to the
-fields that kind carries. Give it both:
+Give `Ledger.New` your state type and a map of your op kinds, and the store checks every write:
 
 ```luau
 export type Ops = {
@@ -85,18 +83,16 @@ export type Ops = {
 	AddGold: { Amount: number },
 }
 
-local Store = Ledger.NewTyped<<Profile, Ops>>({
+local Store = Ledger.New<<Profile, Ops>>({
 	Name = "PlayerData",
 	Default = { Gold = 100, Items = {} },
 	Reducer = Reducer,
 })
 ```
 
-`Apply`, `Commit` and `Edit` then check the kind against the ones you named and the fields against
-what that kind carries. Your reducer gets `Ledger.Op<Ops>`, which narrows on `Op.Kind`.
-
-It takes every option `Ledger.New` takes and validates them the same way. The store it builds is the
-same object and behaves identically at runtime. See [Typed ops](/docs/concepts/typed-ops).
+`Apply`, `Commit` and `Edit` then check the kind against the ones you named, and the fields against
+what that kind carries. Your reducer gets `Ledger.Op<Ops>`, which narrows on `Op.Kind`. At runtime
+the store is the same either way. See [Typed ops](/docs/concepts/typed-ops).
 
 ## Ledger.Id
 
@@ -105,8 +101,8 @@ Ledger.Id() -> string
 ```
 
 Creates a short id that is different on every server and on every call. It is the id Ledger puts on
-its own ops. Use it for an op you build yourself, a transfer or a transaction. Mint it one time and
-keep it for every retry.
+its own ops. Use it for an op you build yourself, a transfer or a transaction. Create it once and
+use the same id for every retry.
 
 ```luau
 local Op = { Id = Ledger.Id(), Kind = "GrantReward", Item = "Sword" }
@@ -136,8 +132,9 @@ Ledger.Reason.Behind
 Ledger.Sweep() -> ()
 ```
 
-Forces a background maintenance pass right now: finish stranded transfers, settle stuck transaction
-legs, tidy up old markers. The sweeper does this on its own, so this is for tests and incidents.
+Runs a sweeper pass now. It finishes unfinished transfers, settles parked transaction legs and
+removes old transaction markers. The sweeper does this on its own, so this is for tests and
+incidents.
 
 ## Ledger.CloseAll
 
@@ -145,10 +142,16 @@ legs, tidy up old markers. The sweeper does this on its own, so this is for test
 Ledger.CloseAll() -> ()
 ```
 
-Shuts everything down. Stops the sweeper, tells every queue to skip ahead to the last write, saves
-every live session, and yields until it's all done.
+Shuts everything down, in this order:
 
-Put this in `BindToClose` and nothing else.
+1. Stops the sweeper.
+2. For each key, keeps only the newest datastore call that is waiting in the queue. The calls it
+   drops return `Closed`.
+3. Cuts datastore retries to 2 attempts.
+4. Stops every `Follow` timer, writes every queued bump, and saves every live session.
+5. Yields until those saves finish.
+
+Call it from `BindToClose`, and put nothing else in that callback.
 
 ```luau
 game:BindToClose(function()
