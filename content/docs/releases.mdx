@@ -5,6 +5,14 @@ description: What changed from v6, and what you have to change with it.
 
 `+` is new in v7, `~` exists in v6 and works differently now, `-` is gone, `!` is something to know before you upgrade.
 
+## 7.0.1
+
+```diff
+~ One op in a Ledger.Tx or Quantity:Take leg can be up to 4,096 bytes of terms, up from 512
+```
+
+The 512-byte cap was left over from an early design that stored a leg's op in its key. A pending trade now stores only the change it makes, which already has a 4,096-byte cap, so the op cap matches it. Nothing else changed: update by bumping the version.
+
 ## 7.0.0
 
 Ledger 7 is rebuilt from scratch. It's cheaper, holds more, and every edge case we could find is tested.
