@@ -75,7 +75,7 @@ A key remembers the names of recent ops, so a resend does nothing twice.
 | `Take` `Legs` | One fewer than the `Tx` limit. |
 | Quantity `Parts` | 1 to 64. |
 | `Proceeds` fields | Up to 4. |
-| Holds | Up to 900 s each (`HoldMax`). 256 at once per part. |
+| Holds | Up to 900 s each (`HoldMax`), plus 60 s for clock differences between servers. 256 at once per part. |
 | `Close` removing parts | After 62 minutes from the first `Open`. |
 | Totals `Shards` | 1 to 64, 16 by default. Do not change a live total's `Shards`. |
 

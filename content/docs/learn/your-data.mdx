@@ -232,9 +232,9 @@ Every store has to say these two:
 
 | Option | `true` | `false` |
 |---|---|---|
-| `MustExist` | The data must already exist. Loading or changing a key with no data fails with `Missing`. | Data that doesn't exist yet starts from `Default`, and is saved the first time it changes. |
+| `MustExist` | Changing a key with no data fails with `Missing`. In a player store, the player's own session is the exception: `Load` starts a new player from `Default`, so only the player creates their own data. | Data that doesn't exist yet starts from `Default`, and is saved the first time it changes. |
 | `Erasable` | You can delete a key's data for good with `Erase`, for example for a GDPR request. | `Erase` isn't allowed. |
 
-For player data, use `MustExist = false` and `Erasable = true`. Pick `Erasable` before your game goes live: turning it on later takes extra care, covered in [Deleting data](/docs/learn/deleting-data).
+For player data, use `MustExist = false` and `Erasable = true`. Use `MustExist = true` on a player store if nothing else should create a player's data, so a gift or a trade sent to someone who has never played answers `Missing` instead. Pick `Erasable` before your game goes live: turning it on later takes extra care, covered in [Deleting data](/docs/learn/deleting-data).
 
 Next: [Players](/docs/learn/players)

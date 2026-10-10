@@ -34,7 +34,7 @@ Takes a config table and returns the store. `Data` is the shape of one key's dat
 | `Name` | The store's name. Never change it once players have data. |
 | `Keys` | `"Player"` for player data, `"String"` for keys you choose, like a guild id. |
 | `Default` | What a new key starts with. Every field the data will ever have. |
-| `MustExist` | `true`: a key with no saved data answers `Missing`. `false`: it starts from `Default`. |
+| `MustExist` | `true`: changing a key with no saved data answers `Missing`, except that a player's own `Load` starts them from `Default`. `false`: a key with no data starts from `Default`. |
 | `Erasable` | `true`: `Erase` works on this store. |
 | `Reducer` | Your function that applies an op. See [Your data](/docs/learn/your-data). |
 | `Balances` | Number fields Ledger changes for you. See below. |

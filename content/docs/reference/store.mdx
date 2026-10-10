@@ -152,7 +152,7 @@ See [Support tools](/docs/guides/support-tools). `Pending` answers `Unresolved` 
 | `WaitForLoaded(Player)` | Waits for a load that has started. |
 | `Read(Player)` | The session's data, or `nil`. |
 
-`Load` answers `nil, nil` if the player left. Otherwise the reason is `Unresolved`, `Missing`, `Behind`, `Busy` or `Unreadable`. Then `OnLoadFailed` runs, and the player is kicked unless `Kick = false`.
+`Load` answers `nil, nil` if the player left. Otherwise the reason is `Unresolved`, `Behind`, `Busy` or `Unreadable`. A player with no saved data is never a failure: `Load` starts them from `Default`, even with `MustExist = true`. Then `OnLoadFailed` runs, and the player is kicked unless `Kick = false`.
 
 ## Destroy
 
