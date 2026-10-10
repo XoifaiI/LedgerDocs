@@ -1,0 +1,198 @@
+---
+title: Limited items
+description: Sell a fixed number of an item across every server, numbered, without ever selling one too many.
+---
+
+Say you want to sell exactly 300 Golden Swords, each with its own number from 1 to 300, across every server at once. If each server kept its own count, two servers could sell sword number 300 at the same moment. Ledger keeps one shared stock, so that never happens.
+
+## 1. Declare the stock
+
+The stock lives in a store of its own. Add it to `Stores`:
+
+```luau
+local ItemStore = Ledger.New({
+	Name = "LimitedItems",
+	Keys = "String",
+	Default = {},
+	MustExist = false,
+	Erasable = false,
+	Quantities = {
+		GoldenSword = { Parts = 2, Mode = "Final", Stock = 300, Serials = { First = 1, Count = 300 } },
+	},
+})
+```
+
+This store only holds stock, so it has no data or reducer of its own.
+
+- **`Stock`** is how many there will ever be.
+- **`Serials`** numbers them. Here they go from 1 to 300, so `Count` matches `Stock`. Leave `Serials` out if you don't need numbers.
+- **`Mode = "Final"`** means the stock never grows. Once the last one sells, it's sold out for good.
+- **`Parts`** splits the stock so many servers can sell at once. For a few hundred items, 2 is plenty. More parts let more servers sell at the same moment.
+
+Once the sale is live, never change these numbers. To sell more later, add a new quantity with a new name and its own serial range, like `GoldenSword2` with `First = 301`.
+
+## 2. The buyer's op
+
+The player needs somewhere to keep their serial numbers, and an op that charges them. Add `Serials` to `PlayerData` and its `Default`, and a `BuyLimited` op:
+
+```luau
+export type PlayerData = {
+	Gold: number,
+	Serials: { [string]: number },
+}
+
+type PlayerOps = {
+	-- ... the ops you have
+	BuyLimited: { Item: string, Price: number },
+}
+```
+
+```luau
+-- in the reducer:
+if Op.Kind == "BuyLimited" then
+	if Data.Gold < Op.Price then
+		return nil -- not enough gold
+	end
+
+	if Data.Serials[Op.Item] then
+		return nil -- already owns one
+	end
+
+	local New = table.clone(Data)
+	New.Gold -= Op.Price
+	return New
+end
+```
+
+The reducer only takes the gold. It never writes the serial number itself: Ledger does that in the next step.
+
+## 3. Sell it
+
+Put this in a ModuleScript called `GoldenSword` in `ServerStorage`:
+
+```luau
+--!strict
+local ServerStorage = game:GetService("ServerStorage")
+
+local Stores = require(ServerStorage.Stores)
+
+local PlayerStore = Stores.PlayerStore
+local Stock = Stores.ItemStore:Quantity("GoldenSword")
+
+local ITEM = "GoldenSword"
+local PRICE = 500
+local SALE_ENDS = DateTime.fromUniversalTime(2026, 12, 31).UnixTimestamp
+
+local IsOpened = false
+
+local function TakeOne(Player: Player)
+	local Op = { Kind = "BuyLimited" :: "BuyLimited", Item = ITEM, Price = PRICE }
+	return Stock:Take(1, {
+		Legs = { { Store = PlayerStore, Key = Player.UserId, Op = Op, Slot = { "Serials", ITEM } } },
+	})
+end
+
+-- Sells one sword. The serial number lands in the player's Serials.
+local function Buy(Player: Player): (boolean, string?)
+	if os.time() >= SALE_ENDS then
+		return false, "SoldOut"
+	end
+
+	local Session = PlayerStore:Get(Player)
+	if Session then
+		Session:Flush()
+	end
+
+	local Ok, Result, Info = TakeOne(Player)
+
+	if Result == "Missing" and not IsOpened then
+		-- The very first sale on this server: make the stock, then try again.
+		IsOpened = true
+		Stock:Open()
+		Ok, Result, Info = TakeOne(Player)
+	end
+
+	local Why = if type(Result) == "string" then Result else nil
+	if Why == "Unresolved" and Info and Info.Outcome then
+		Ok, Why = Info.Outcome:Wait()
+	end
+
+	local SessionAfter = PlayerStore:Get(Player)
+	if SessionAfter then
+		SessionAfter:Refresh()
+	end
+
+	return Ok, Why
+end
+```
+
+`Take(1, ...)` takes one sword from the stock. The `Legs` line runs the buyer's `BuyLimited` op in the same step, so the stock goes down and the gold comes off together, or neither happens. If the reducer says no, the sword stays in stock.
+
+`Slot = { "Serials", ITEM }` tells Ledger where to write the sword's number. After a sale, the player's data has `Serials.GoldenSword = 17`, or whichever number they got.
+
+Like a [trade](/docs/learn/trading), the sale works on the player's saved data. That's why it calls `Flush` before and `Refresh` after.
+
+The stock doesn't exist until something makes it. The first time anyone tries to buy, `Take` answers `Missing`, and the code calls `Open` to make it. `Open` only does anything the first time, so it doesn't matter which server gets there first. The `SALE_ENDS` check matters here: after the sale is over, the stock is removed, and calling `Open` again would make 300 new swords.
+
+### What `Buy` answers
+
+| Answer | What it means |
+|---|---|
+| `true` | Sold. The number is in the player's `Serials`. |
+| `Refused` | The reducer said no: not enough gold, or they already own one. |
+| `SoldOut` | None left. |
+| `Short` | None free right now. Treat it as sold out. |
+| `Unresolved` | Only if the wait gave up too. Ledger keeps going, and the sword shows up in their data if it went through. |
+
+[Answers](/docs/learn/answers) has the rest.
+
+## 4. Show how many are left
+
+```luau
+local function Left(): number?
+	local Counts = Stock:Total(15)
+	if not Counts then
+		return nil
+	end
+
+	return Counts.Free
+end
+```
+
+`Total` gives `Free`, how many are left to buy, and `Held`. The `15` lets it reuse an answer up to 15 seconds old, and otherwise it reads a shared copy, so it costs no DataStore requests and is fine to call for a shop screen. Sold so far is `300 - Counts.Free - Counts.Held`.
+
+## 5. End the sale
+
+When the sale is over, close the stock. A Script in `ServerScriptService`:
+
+```luau
+--!strict
+local ServerStorage = game:GetService("ServerStorage")
+
+local GoldenSword = require(ServerStorage.GoldenSword)
+
+-- Every server closes the sale when it ends. A server that starts later closes it again, which is safe.
+task.delay(math.max(0, GoldenSword.SALE_ENDS - os.time()), GoldenSword.EndSale)
+```
+
+With this in `GoldenSword`, and `EndSale` and `SALE_ENDS` added to what it returns:
+
+```luau
+local function EndSale()
+	Stock:Close()
+end
+```
+
+`Close` is safe to call from every server, any number of times. After it, nothing more sells. It also removes the parts of the stock that sold out (once the stock is over an hour old), and a `Take` on those answers `Missing` again, as if it had never been opened.
+
+That's the one thing to be careful about. Never call `Open` on a sale that's ended, or the stock comes back. The `SALE_ENDS` check in `Buy` stops that. In your next update, also mark the quantity closed, which makes `Open` throw:
+
+```luau
+GoldenSword = { Parts = 2, Mode = "Final", Stock = 300, Serials = { First = 1, Count = 300 }, Closed = true },
+```
+
+## Holding one during checkout
+
+If the player has to confirm first, like a Robux purchase, you can hold a sword for a few minutes so nobody else gets it meanwhile. See `Hold`, `Confirm` and `Release` in the [reference](/docs/reference/quantity).
+
+Next: [Global counters](/docs/learn/global-counters)

@@ -1,0 +1,144 @@
+---
+title: Shutdown and testing
+description: What happens to your data when a server shuts down, and how to test your reducer.
+---
+
+## When a server shuts down
+
+You don't need to do anything. When a server shuts down, Ledger saves every player's waiting changes before it closes. You don't need `game:BindToClose` for your data.
+
+The only thing Ledger can't save is something it doesn't know about yet. Say players earn gold during a round, and you keep it in a table until the round ends. If the server shuts down mid-round, that table is lost. Use `Ledger.BeforeClose` to hand it to Ledger first:
+
+```luau
+-- Gold each player has earned this round, paid out when the round ends.
+local RoundGold: { [Player]: number } = {}
+
+local function PayOut(Player: Player)
+	local Gold = RoundGold[Player]
+	RoundGold[Player] = nil
+	if not Gold or Gold <= 0 then
+		return
+	end
+
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return
+	end
+
+	Session:Apply({ Kind = "AddGold", Amount = Gold })
+end
+
+-- If the server shuts down mid-round, pay everyone what they have so far.
+Ledger.BeforeClose(function()
+	for _, Player in Players:GetPlayers() do
+		PayOut(Player)
+	end
+end)
+```
+
+`BeforeClose` runs your function at the start of the shutdown, before Ledger saves. Call it once when the server starts. Keep the function quick: it gets at most 5 seconds.
+
+Don't use `game:BindToClose` for this. By the time yours runs, Ledger is already closing, and every new call answers `Closed`.
+
+The simplest fix is not to need this at all: `Apply` each change as it happens, instead of keeping it in a table.
+
+## Testing the reducer
+
+The reducer is just a function, so you can test it without any DataStore at all. Move it out of `Ledger.New` into a local function, and return it from `Stores` too:
+
+```luau
+local function Reduce(Data: PlayerData, Op: Ledger.Op<PlayerOps>): PlayerData?
+	if Op.Kind == "AddGold" then
+		return { Gold = Data.Gold + Op.Amount }
+	end
+
+	if Op.Kind == "SpendGold" then
+		if Data.Gold < Op.Amount then
+			return nil -- not enough gold
+		end
+
+		return { Gold = Data.Gold - Op.Amount }
+	end
+
+	return nil
+end
+
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	-- ...
+	Reducer = Reduce,
+})
+
+return {
+	PlayerStore = PlayerStore,
+	Reduce = Reduce,
+}
+```
+
+Then a Script in `ServerScriptService` can check it:
+
+```luau
+--!strict
+local RunService = game:GetService("RunService")
+local ServerStorage = game:GetService("ServerStorage")
+
+local Stores = require(ServerStorage.Stores)
+
+if not RunService:IsStudio() then
+	return
+end
+
+local Rich = { Gold = 100 }
+
+assert(Stores.Reduce(Rich, { Kind = "SpendGold", Amount = 500 }) == nil, "spending too much is refused")
+
+local After = Stores.Reduce(Rich, { Kind = "SpendGold", Amount = 40 })
+assert(After and After.Gold == 60, "spending 40 of 100 leaves 60")
+
+print("Reducer tests passed")
+```
+
+`Ledger.Op<PlayerOps>` is the type of any op from `PlayerOps`, the same one `Ledger.New` gives the reducer.
+
+## Testing without real DataStores
+
+Ledger can run on the [Mock](https://github.com/XoifaiI/mock) package instead of the real DataStores and MemoryStore. It keeps everything in memory, with the same limits as the real services, so nothing your tests do touches your players' data.
+
+Install it with Wally (`Mock = "xoifaii/mock@1.0.0"`), or put `Mock.rbxm` in your game. Then give a store the mock:
+
+```luau
+local Mock = require(ReplicatedStorage.Packages.Mock)
+
+local FakeServices = Mock.New({ Players = 10 })
+
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	Name = "PlayerData",
+	Keys = "Player",
+	Default = { Gold = 0 },
+	MustExist = false,
+	Erasable = true,
+	Reducer = Reduce,
+	Mock = FakeServices,
+})
+```
+
+The mock is for the whole server, because Ledger's own bookkeeping shares the services with your stores:
+
+- Every store runs on it, including ones that leave `Mock` out.
+- Giving a different mock to another store throws.
+- Give it before Ledger saves or loads anything. A mock given after Ledger's first request throws, so a store never switches halfway.
+
+`Players` sets how many players the mock's request budget is sized for. `Mock.New({ Throttled = false })` turns its limits off.
+
+## What Studio checks for you
+
+In Studio, Ledger watches your reducer more closely than on a live server:
+
+| Studio warns when | Fix |
+|---|---|
+| The reducer changes the `Data` or `Op` it was given | Clone the table and change the copy, as in [Bigger reducers](/docs/learn/bigger-reducers). In Studio, changing them throws. |
+| The reducer gives a different answer for the same data and op | Don't use `os.time()`, `math.random()` or anything else that changes between calls. Put those in the op instead. |
+| The reducer doesn't return `nil` for a kind it doesn't know | End the reducer with `return nil`. |
+
+These checks only run in Studio, but the rules hold everywhere. A reducer that breaks them on a live server can give players the wrong data.
+
+Next: [Common mistakes](/docs/learn/common-mistakes)

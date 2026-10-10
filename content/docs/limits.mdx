@@ -1,243 +1,110 @@
 ---
 title: Limits
-description: Every cap Ledger enforces and where it comes from.
+description: The numbers that change what you write.
 ---
 
-Some of these are Roblox's and some are Ledger's. You can't change the Roblox ones. The Ledger ones
-are set below the real limit so you get a clean refusal instead of a failed save.
+Check a number before you hit it.
+
+```luau
+-- Short names keep a key's list of used names small.
+local Options: Ledger.TxOptions = { Id = "pay:" .. HttpService:GenerateGUID(false), IdAt = Ledger.Now() }
+```
+
+Only numbers that change what you do are here. A call that breaks a limit with a mistake throws before it sends anything. A call that meets a limit while running answers with a reason, such as `Full` or `Backlog`.
 
 ## Names and keys
 
-| | Cap | |
-| --- | --- | --- |
-| Store name | 47 characters | Ledger, so `<Name>_Tx` fits in the datastore's 50 |
-| Entity key | 50 characters | Roblox |
-| Transfer id | 64 characters | Ledger |
-| Transaction id | 50 characters | Ledger |
-
-Player keys are the UserId, so they always fit. Entity keys have to be valid UTF-8.
+| | Limit |
+| --- | --- |
+| Store name | 1 to 50 bytes. Not `Ledger$N`, which Ledger keeps for itself. |
+| String key | 1 to 50 bytes of valid UTF-8. Cannot start with `$T:` or `$P:`. |
+| Player key | A UserId, a whole number. |
+| `Id` text | At most 64 characters. |
+| Total or quantity name | 1 to 37 bytes. |
+| `IdAt` | At most 1 day ahead of `Ledger.Now()`. |
 
 ## Size
 
-| | Cap | |
+| | Limit | What to do |
 | --- | --- | --- |
-| Stored value | 4 MB | Roblox |
-| Folded state | 2 MB | Ledger |
-| One op | 1 MB | Ledger |
-| Unsaved ops | 1.5 MB | Ledger |
-| Queued ops | 4096 | Ledger |
-| Reservations on one key | 256 | Ledger |
+| One key's data | About 4 MB (4,160,526 bytes). A warning shows past 2 MiB. | Past the cap, a write answers `Full`. Keep an active key well under 1 MB. |
+| One key's writes | About 4 MB of writes a minute. | A big key cannot be written often. Spread hot data over several keys. |
+| One op in a `Tx` or `Take` | 512 bytes of terms. | Keep ops small. |
+| Data | Plain tables only, up to 64 deep. No cycles, `NaN`, or arrays with gaps or mixed keys. | |
+| Numbers | Whole numbers below 2^53 unless you give an `Arithmetic`. | |
+| `Reset` with a `State` | At most 1 MiB. | |
 
-State can hold numbers, strings, booleans, tables and buffers. A buffer counts as about a third more
-than its length. The datastore stores a buffer at that size, and these caps count the same size.
+## How long Ledger remembers a name
 
-State caps at 2 MB rather than 4, which leaves room for the ops stored alongside the snapshot.
+A key remembers the names of recent ops, so a resend does nothing twice.
 
-An op that would push state over the cap is refused with [`Full`](/docs/concepts/reasons). Ops that
-shrink it are still allowed, so a cleanup works when you're already over.
-
-Size also decides how often a key can be written. Roblox lets one key take 4 MB of writes a minute,
-and every write stores the whole record again. An active player saves twice a minute. A player key
-near the 2 MB cap then uses its whole per minute write limit on autosaves, and a `Commit` waits
-behind them. Keep an active player key under about 1 MB.
-
-A key many servers write to reaches the same limit sooner. Once it has taken 2,048 ops, its list of
-seen op ids alone is about 55 KB. At that size, the 4 MB a minute allows about 70 writes a minute
-before the rest of the state is counted.
-
-Hitting the unsaved caps returns [`Backlog`](/docs/concepts/reasons), and in practice that only
-happens when the datastore is down.
-
-Ledger keeps two tables of its own in the state, and they clear on different rules:
-
-| | Holds | Clears after |
+| | Limit | What to do |
 | --- | --- | --- |
-| `_Received` | names already applied | 30 days |
-| `_Held` | units set aside for a transfer | 7 days to deliver, 8 to give back |
+| Timed names (`Id` and `IdAt`, or `Ledger.Id()`) | Remembered 180 s by default. A key holds about 275 GUID names. | Keep names short. `NoRoom` means the list is full: send again later. |
+| Untimed names (`Id` alone) | A key holds about 90 GUID names. Remembered only for the time you set in `Windows`. | Prefer timed names. |
+| `Windows` | How long a name is remembered. Timed: 136 s to 30 days. Untimed: 76 s to 30 days, and you must set it to use one. | Set `Untimed` for any op kind you name without `IdAt`. |
+| `CutWindow` | How old a `Ledger.Id()` name can be. 360 s by default, 318 s to 30 days. | Make the name just before an `Erase` or `Reset`. After this long, a server answers `Expired`. |
 
-A reservation is not one of them. A hold lives in MemoryStore and uses no space on the key.
+## Waiting
 
-Neither grows with uptime. Each is bounded by how much happened inside its own window.
-
-## Applied names
-
-The set of applied names lives in the state, so it counts against the state cap. It does not grow
-without bound. Ledger keeps the applied names in one bucket per day. Every time one is written,
-Ledger drops every day's bucket older than 30 days, for every kind of applied name. An applied name
-lasts 30 to 31 days.
-
-A write copies only the bucket for its own day. The cost of a write does not grow with the names on
-the key.
-
-One applied name is about 37 bytes when Ledger picked the id, and more if you chose the id yourself.
-A rolling 30 day window is nowhere near the state cap for any real player. An applied name also
-carries a short fingerprint of the terms. The fingerprint lets an id reused for a different amount
-return [`Spent`](/docs/concepts/reasons) instead of `true`.
-
-`ClearDelivered` drops the day buckets older than 30 days now, rather than at the next write of an
-applied name. It never drops a delivery id younger than 30 days. A sender can ask for a refund up to
-that point, and the refund needs the evidence that the delivery happened.
-
-A key that many players write to fills as fast as all of them write to it. Every `Tx` leg and every
-`Transfer` adds one applied name of about 37 bytes, kept for 30 days. That is about 1,900 a day on
-one key before the applied names alone fill the state cap. A transfer into or out of a full key then
-returns [`Full`](/docs/concepts/reasons), and the money stays where it was. The key still takes
-other writes, and it takes transfers again as old day buckets run out.
-
-`Reserve` adds no name. `Confirm` adds one only when you give it a [`Once`](/docs/concepts/once).
-Stock sold without one has no such ceiling.
-
-While the traffic keeps up, the key stays at the cap. Each day bucket that runs out makes room, and
-the next legs and transfers fill it again. `ClearDelivered` cannot help, because nothing on the key
-is older than 30 days. Spread the entity over several keys before that point, the same way `Bump`
-spreads a total. See [Entity stores](/docs/guides/entity-stores).
-
-A short id such as `tip:8412` takes fewer bytes than a random string, which keeps this set smaller.
-
-## Transactions
-
-Between 2 and 4 legs, and a key can only appear once.
-
-One key doesn't need a transaction, which is why two is the minimum. `Edit` already applies to a
-single key or refuses it.
-
-The maximum is four because each leg blocks its key while it waits. A leg is written to its key
-first and stays parked there, and anything else writing to that key meanwhile returns
-[`Busy`](/docs/concepts/reasons). If the server running the transaction dies, another one has to
-abort it, and it may not do that until the marker has been unchanged for 30 seconds per leg. Four
-legs can block four keys for two minutes.
-
-Committed markers get tidied up in the background about an hour later.
-
-A transaction id ages out after 30 days, the same as every other applied name. A transaction lives at
-most an hour, so 30 days covers the whole protocol many times over. It does not cover an id reused a
-month later, which applies again. Derive ids from the thing the transaction is for, and they are
-never reused.
-
-### One key at a time
-
-A key takes one transaction at a time. While a leg is parked on it, every other transaction touching
-that key returns [`Busy`](/docs/concepts/reasons) and stops. `Tx` does not retry a `Busy` for you,
-because every server retrying at once would multiply the load on a key that is already contended.
-
-Retry it yourself with a short backoff. Measured on the mock, with 32 servers each starting a two leg
-transaction on one bank key at the same moment:
-
-| | went through | datastore requests | MemoryStore units |
-| --- | --- | --- | --- |
-| With MemoryStore | 1 | 8 | 101 |
-| Without MemoryStore | 2 | 130 per success | 0 |
-
-With MemoryStore, the first server to lease the keys drives the transaction. The others return `Busy`
-at once, having spent about 3 units each and no datastore request. Without MemoryStore, every server
-drives its transaction and they race on the key.
-
-Plan around this for anything every player writes to, such as a guild bank, a global shop or an event
-total. Spread the writes across keys where you can, for example one key per guild rather than one for
-all of them. Correctness never suffers from contention, only throughput.
-
-### What an operation costs
-
-Measured on the mock, for the path where nothing fails.
-
-| operation | datastore requests |
+| Call | How long it can take |
 | --- | --- |
-| `Peek`, `Edit`, `EditOp`, `Bump` | 1 |
-| `Bump`, with `BumpEvery` | 0, and one per total per window |
-| `Peek` with a `MaxAge`, from this server's copy | 0 |
-| `Peek` with a `MaxAge`, from the shared copy | 0, and one MemoryStore unit |
-| `Peek` with a `MaxAge`, refilling the copy | 1, and five units, on one server a minute |
-| `Reserve`, the first hold on a key | 1, and four MemoryStore units |
-| `Reserve`, `Release` | 0, and two MemoryStore units |
-| `Confirm` | 1, and three MemoryStore units |
-| `Holds` | 0, and one MemoryStore unit |
-| `Transfer` | 3, or 4 with your own `Id` |
-| `Tx`, 2 legs | 8, and eight MemoryStore units |
-| `Tx`, 4 legs | 12, and sixteen MemoryStore units |
-| `Total`, from this server's own sum | 0 |
-| `Total`, from the cached sum | 0, and one MemoryStore unit |
-| `Total`, cold | 16, and five units, on one server a minute |
+| `Ledger.Id()` | `Busy` after 5 s with no server number. |
+| A read (`Peek`, `Inspect`, `Losses`, `Resettle`) | `Unresolved` after 30 s. `Pending` too, on a hung read. |
+| `Bump` | 0 to 60 s, up to 90 s if saves fail. Call it in `task.spawn`. |
+| `Erase` | About 200 s at worst. |
+| `Peek` of a key where a crashed server left trade work | Up to about 30 minutes `Unresolved`. Call `Resettle` to end it now. |
+| A session save | Every 30 s. Idle sessions read every 120 s. |
+| Shutdown | 25 s. `BeforeClose` functions share the first 5 s. |
 
-A transaction spends 4 requests on its marker whatever the leg count, so the marker is half the cost
-of a two leg transaction. It also spends 4 MemoryStore units a leg to lease its keys, so two servers
-do not drive one key at once. A `Transfer` with your own `Id` reads the receiver first, to tell a
-retry from a new transfer. A limit that lives on one key is a reservation, not a transaction. See
-[Reservations and totals](/docs/guides/reservations).
+`SaveInterval`, `IdleReadInterval` and `HoldMax` can each be set from 1 s to 30 days.
 
-Roblox gives an experience `UpdateAsync` budget of `300 + 20 per CCU` a minute, which works out at
-about 20 writes per player per minute at any real player count. So a player can average roughly 6
-transfers or 2 two leg transactions a minute across the whole experience, before autosave takes its
-share. Autosave itself is cheap and does not scale with how busy a player is. See
-[Timing](#timing).
+## Queues
 
-## Transfers
+| | Limit | Answer |
+| --- | --- | --- |
+| A session's unsaved `Apply`s | 4,096 ops or 1.5 MiB | `Backlog`. Call `Flush`. |
+| Unanswered writes on one key | 4,096 | `Busy`. Send again later. |
+| Trade work not yet finished on a key | 16 | `NoRoom`. Send again later. |
 
-Recovery resends an unfinished transfer for 7 days. After that it expires and the sender gets the
-money back. Delivered ids stay in the receiver's applied names for 30 days so a late retry can't pay
-twice.
+## Transactions and stock
 
-Recovery handles up to 32 holds per pass, so a key with many unfinished transfers takes a few passes.
+| | Limit |
+| --- | --- |
+| `Ledger.Tx` keys | 2 or more, all different. Up to 29 with 16-character keys; fewer with long names. |
+| `Take` `Legs` | One fewer than the `Tx` limit. |
+| Quantity `Parts` | 1 to 64. |
+| `Proceeds` fields | Up to 4. |
+| Holds | Up to 900 s each (`HoldMax`). 256 at once per part. |
+| `Close` removing parts | After 62 minutes from the first `Open`. |
+| Totals `Shards` | 1 to 64, 16 by default. Do not change a live total's `Shards`. |
 
-## Reservations and totals
+## Reads and watching
 
-A hold lasts 15 minutes. That is both the default and the cap. `Hold` sets a shorter time per
-reservation, and `Reserve` throws above the cap. A checkout that stays open longer calls `Reserve`
-again under the same Id. A hold lives in MemoryStore, so it uses no space on the key and expires on
-its own. One key holds 256 at once.
+| | Limit |
+| --- | --- |
+| `Peek` `MaxAge` | 0 to 30 days. An answer can be up to about 4.5 minutes behind on a key nobody writes. |
+| `Follow` | Checks every 30 s, slowing to 240 s on a quiet key. Copies last 1 hour. |
+| `Store:Keys()` page | 50 keys. Pages are in no set order. |
+| `Cut.Losses`, `Store:Losses` | Kept 7 days. |
 
-Holds share the experience's MemoryStore quota, `1000 + 120 × concurrent users` request units a
-minute, with totals, transaction leases and followed keys. A `Reserve` or `Release` is two units,
-and the first hold on a key is four units and one request. A `Confirm` is three. A `Holds` is one. A
-transaction is four a leg. A key read through
-[`Follow`](/docs/guides/entity-stores#following-a-key) costs one unit per tick on each server that
-follows it. A tick is every 30 seconds, and slows to every 4 minutes while the key does not change.
-`Follow` and `Peek` with a `MaxAge` read a copy of the key kept in MemoryStore. The one server that
-refills that copy spends five units and one request each minute. The copy has to fit one MemoryStore
-item, 32 KB of your fields. A bigger key is read from the record by every server, and Ledger warns
-about it at most once every 30 seconds.
+## Requests per call
 
-A total is spread over 16 keys, or the `Shards` the store names, 1 to 99. `Total` returns a sum
-cached in MemoryStore, for one request unit. A server that read the sum inside the `MaxAge` you pass,
-60 seconds by default, returns its own copy and spends nothing. Each server treats the cached sum as
-stale after its own time between 60 and 75 seconds. Only one server then refills it: it reads every
-shard, one request each, and caches the sum again. The other servers return the cached sum
-meanwhile. `Bump` costs one request and no units. With `BumpEvery` a server pays one request per
-total per window, however many times it bumps.
+How many Roblox DataStore requests a call makes, with no contention. `read` is a `GetAsync`, `write` an `UpdateAsync`.
 
-Each server bumps one shard key, and one shard key takes about 80 writes a minute. With a
-`BumpEvery` of 60, that is about 80 servers on each shard. Set `Shards` to the number of servers
-that bump the total, divided by 80. The default of 16 covers about 1,300 servers. Without
-`BumpEvery`, every bump is its own write, so count bumps a minute instead of servers. Raise `Shards`
-before you need it. Never lower it.
+| Call | Requests |
+| --- | --- |
+| `Edit`, `Commit` | 1 write. The first `Edit` of an erasable key also reads once. |
+| `Apply` | None. It rides the next save: 1 write per 30 s, however many ops. |
+| `Load` | 1 read. An idle session then reads once per 120 s. |
+| `Peek`, `Inspect`, `Losses`, `Pending` | 1 read. |
+| `Peek(Key, MaxAge)` | None inside `MaxAge`. |
+| `Peek(Key, { Fresh = true })` | 1 write. |
+| `Ledger.Tx`, N keys | N writes before the answer, 2N-1 in all. |
+| `Take`, `Hold`, `Confirm` | 1 write, or with one key in `Legs` 2 before the answer and 3 in all. |
+| `Reset`, `Erase` | 1 write. `Erase` also removes the key. |
+| `Open`, `Close` | One write per part. |
+| `Bump` | One write per shard per server batch. |
+| Server start | 1 write. |
 
-See [Reservations and totals](/docs/guides/reservations).
-
-## Timing
-
-Autosave runs every 30 seconds per session, and compacts as well when the log has gotten long.
-
-A session with nothing queued and no transaction parked on it reads on every fourth autosave. An idle
-player then costs one request every two minutes rather than one every 30 seconds. A session with ops
-queued still writes at the next autosave. Only the read for what other servers did waits.
-
-An autosave is skipped when the server is under 4 requests of write budget, and it warns.
-
-## Compaction
-
-The log is folded into the snapshot once it is worth rewriting the record. The snapshot size decides
-when. A small profile compacts every 128 ops. A large one waits until the log is a fifth of the
-snapshot. Nothing waits past 512 ops.
-
-A big profile is expensive to rewrite, so rewriting it every 128 ops costs more than carrying them. A
-small one is cheap to rewrite, and folding fewer ops keeps loads fast.
-
-## Versions
-
-Roblox keeps 30 days of history per key. `History` pages up to 100 at a time and defaults to 25.
-
-## What isn't limited
-
-There's no lock, so no cap on how many servers write the same key at once. Every server folds the
-same log, so they all agree on the result. A busy key is still limited by throughput: by the write
-rate under [Size](#size), and by one transaction at a time under
-[One key at a time](#one-key-at-a-time).
+Next: [Releases](/docs/releases)

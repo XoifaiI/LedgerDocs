@@ -1,0 +1,248 @@
+---
+title: Common mistakes
+description: The mistakes that cause most bugs with Ledger, each with a wrong and a right version.
+---
+
+Each of these runs fine in a quick test, then loses or duplicates data once real players arrive. They're all covered on earlier pages; this is the short version to check your game against.
+
+## Sending again after `Unresolved`
+
+```luau
+-- Wrong: the first one may still go through, so the player can get paid twice
+local Ok, Why = PlayerStore:Edit(UserId, AddGold)
+if Why == "Unresolved" then
+	PlayerStore:Edit(UserId, AddGold)
+end
+```
+
+```luau
+-- Right: leave it. Ledger keeps sending the first one until it knows.
+local Ok, Why = PlayerStore:Edit(UserId, AddGold)
+if Why == "Unresolved" then
+	return
+end
+```
+
+If you really need to send it again, name it first. See [Once only](/docs/learn/once-only).
+
+## Treating `nil` as empty
+
+```luau
+-- Wrong: a read that failed looks like a brand new player
+local Data = PlayerStore:Peek(UserId)
+local Gold = if Data then Data.Gold else 0
+```
+
+```luau
+-- Right: only Missing means "nothing saved"
+local Data, Why = PlayerStore:Peek(UserId)
+if not Data and Why ~= "Missing" then
+	return -- couldn't read it, try again later
+end
+local Gold = if Data then Data.Gold else 0
+```
+
+See [Reading data](/docs/learn/reading-data).
+
+## Changing the table the reducer was given
+
+```luau
+-- Wrong: changes the data Ledger handed you, not a copy
+if Op.Kind == "AddGold" then
+	Data.Gold += Op.Amount
+	return Data
+end
+```
+
+```luau
+-- Right: change a copy
+if Op.Kind == "AddGold" then
+	local New = table.clone(Data)
+	New.Gold += Op.Amount
+	return New
+end
+```
+
+Studio throws for the wrong version. A live server doesn't, and the data goes wrong instead. See [Bigger reducers](/docs/learn/bigger-reducers).
+
+## Time or randomness in the reducer
+
+```luau
+-- Wrong: the reducer can run more than once, and give a different answer each time
+if Op.Kind == "OpenEgg" then
+	local Pet = PETS[math.random(#PETS)]
+	-- ...
+end
+```
+
+```luau
+-- Right: pick it outside, and put it in the op
+local Pet = PETS[math.random(#PETS)]
+Session:Apply({ Kind = "OpenEgg", Pet = Pet })
+```
+
+The same goes for `os.time()`. The daily reward on [Once only](/docs/learn/once-only) puts the day in the op for this reason.
+
+## Changing data outside the reducer
+
+```luau
+-- Wrong: the player sees gold that isn't saved
+Player.leaderstats.Gold.Value += 10
+PlayerStore:Edit(Player.UserId, AddGold)
+```
+
+```luau
+-- Right: change the data with an op, and show what was saved
+local Ok = PlayerStore:Edit(Player.UserId, AddGold)
+local Session = PlayerStore:Get(Player)
+if Ok and Session then
+	Session:Refresh()
+end
+```
+
+See [Purchases](/docs/learn/purchases).
+
+## Not refreshing after `Edit`, a trade or a sale
+
+```luau
+-- Wrong: the session still shows the old gold until its next save
+PlayerStore:Edit(Player.UserId, AddGold)
+print(Session:Get().Gold)
+```
+
+```luau
+-- Right: Refresh once it's saved
+local Ok = PlayerStore:Edit(Player.UserId, AddGold)
+if Ok then
+	Session:Refresh()
+end
+```
+
+## Not flushing before a trade or a sale
+
+```luau
+-- Wrong: the player just spent gold with Apply, but it isn't saved yet,
+-- so the trade sees the gold they no longer have
+Session:Apply({ Kind = "SpendGold", Amount = 100 })
+Ledger.Tx({ ... })
+```
+
+```luau
+-- Right: save what's waiting first
+Session:Apply({ Kind = "SpendGold", Amount = 100 })
+Session:Flush()
+Ledger.Tx({ ... })
+```
+
+See [Trading](/docs/learn/trading).
+
+## Making the same store twice
+
+```luau
+-- Wrong: a second Ledger.New for the same store, in another script
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({ Name = "PlayerData", ... })
+```
+
+```luau
+-- Right: make it once in Stores, and require it everywhere
+local Stores = require(ServerStorage.Stores)
+local PlayerStore = Stores.PlayerStore
+```
+
+## Adding a field without a migration
+
+```luau
+-- Wrong: players who saved before this update have no Pets, so Data.Pets is nil
+Default = { Gold = 0, Pets = {} },
+```
+
+```luau
+-- Right: add the field to Default and add a migration
+Default = { Gold = 0, Pets = {} },
+Migrations = {
+	{
+		Fields = { "Pets" },
+		Run = function(Stored: unknown): unknown
+			local New = table.clone(Stored :: Saved)
+			New.Pets = {}
+			return New
+		end,
+	},
+},
+```
+
+See [Changing your data](/docs/learn/changing-data).
+
+## Waiting for a counter on the player's thread
+
+```luau
+-- Wrong: Bump can take up to a minute, and the player waits for it
+StatsStore:Bump("BossKills", 1)
+```
+
+```luau
+-- Right: run it in the background
+task.spawn(function()
+	StatsStore:Bump("BossKills", 1)
+end)
+```
+
+See [Global counters](/docs/learn/global-counters).
+
+## Opening a limited item after the sale ended
+
+```luau
+-- Wrong: once the sale is closed, Take answers Missing again, and this makes the stock again
+if Result == "Missing" then
+	Stock:Open()
+end
+```
+
+```luau
+-- Right: only open while the sale is on
+if Result == "Missing" and os.time() < SALE_ENDS then
+	Stock:Open()
+end
+```
+
+See [Limited items](/docs/learn/limited-items).
+
+## Waiting inside a `Follow`
+
+```luau
+-- Wrong: Edit waits, and a Follow function can't
+GuildStore:Follow(GuildId):Subscribe(function(Value)
+	GuildStore:Edit(GuildId, Op)
+end)
+```
+
+```luau
+-- Right: start it in a new thread
+GuildStore:Follow(GuildId):Subscribe(function(Value)
+	task.spawn(function()
+		GuildStore:Edit(GuildId, Op)
+	end)
+end)
+```
+
+## Saving in `BindToClose`
+
+```luau
+-- Wrong: by the time this runs, Ledger is already closing, and Apply answers Closed
+game:BindToClose(function()
+	PayOutRounds()
+end)
+```
+
+```luau
+-- Right
+Ledger.BeforeClose(function()
+	PayOutRounds()
+end)
+```
+
+See [Shutdown and testing](/docs/learn/shutdown-and-testing).
+
+That's the end of the Learn pages. [Answers](/docs/learn/answers) lists every answer a call can give.
+
+Next: [Auctions and markets](/docs/guides/auctions-and-markets)

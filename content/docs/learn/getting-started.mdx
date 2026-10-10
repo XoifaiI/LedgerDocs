@@ -1,0 +1,216 @@
+---
+title: Getting started
+description: Install Ledger and save your first player's gold.
+---
+
+## Install
+
+Pick one:
+
+- **Wally:** add `Ledger = "xoifaii/ledger@7.0.0"` to `[dependencies]` in your `wally.toml`.
+- **Model file:** download `Ledger.rbxm` from the GitHub releases page and drop it into `ReplicatedStorage`.
+
+Ledger goes in `ReplicatedStorage` so your client scripts can use `Ledger.Reason` too. Everything else in Ledger only runs on the server.
+
+The samples on these pages use `require(ReplicatedStorage.Ledger)`. With Wally, require it from your `Packages` folder instead.
+
+To test saving in Studio, turn on **Game Settings → Security → Enable Studio Access to API Services**.
+
+## Make a store
+
+A store is where one kind of data lives. Put your stores in one ModuleScript, `ServerStorage.Stores`, so every server script uses the same ones and clients can't see them.
+
+```luau
+--!strict
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Ledger = require(ReplicatedStorage.Ledger)
+
+export type PlayerData = {
+	Gold: number,
+}
+
+type PlayerOps = {
+	AddGold: { Amount: number },
+	SpendGold: { Amount: number },
+}
+
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	Name = "PlayerData",
+	Keys = "Player",
+	Default = { Gold = 0 },
+	MustExist = false,
+	Erasable = true,
+	Reducer = function(Data, Op)
+		if Op.Kind == "AddGold" then
+			return { Gold = Data.Gold + Op.Amount }
+		end
+
+		if Op.Kind == "SpendGold" then
+			if Data.Gold < Op.Amount then
+				return nil -- not enough gold
+			end
+
+			return { Gold = Data.Gold - Op.Amount }
+		end
+
+		return nil
+	end,
+})
+
+return {
+	PlayerStore = PlayerStore,
+}
+```
+
+Here's what each part does:
+
+- **`PlayerData`** is what one player's data looks like.
+- **`PlayerOps`** lists the changes you're allowed to make to it. Each change has a `Kind` and whatever it needs, here an `Amount`.
+- **`Default`** is what a brand new player starts with.
+- **`Reducer`** takes the player's data and a change, and returns the new data. Return `nil` to say no, like when a player tries to spend gold they don't have.
+
+Ledger only ever changes your data through the reducer.
+
+`MustExist` and `Erasable` are covered in [Your data](/docs/learn/your-data). For player data, `false` and `true` are what you want.
+
+## Load players when they join
+
+Ledger doesn't load anyone by itself. Load each player when they join, and unload them when they leave:
+
+```luau
+--!strict
+local Players = game:GetService("Players")
+local ServerStorage = game:GetService("ServerStorage")
+
+local Stores = require(ServerStorage.Stores)
+
+local PlayerStore = Stores.PlayerStore
+
+local function OnPlayerAdded(Player: Player)
+	local Session = PlayerStore:Load(Player)
+	if not Session then
+		return -- they left while loading, or the load failed and they were kicked
+	end
+
+	print(Player.Name, "has", Session:Get().Gold, "gold")
+end
+
+local function OnPlayerRemoving(Player: Player)
+	PlayerStore:Unload(Player)
+end
+
+Players.PlayerAdded:Connect(OnPlayerAdded)
+Players.PlayerRemoving:Connect(OnPlayerRemoving)
+
+for _, Player in Players:GetPlayers() do
+	task.spawn(OnPlayerAdded, Player)
+end
+```
+
+`Load` gives you the player's **session**. You use the session to read and change their data while they're in your server.
+
+If `Load` gives you `nil`, the player either left while loading, or their data couldn't be loaded and Ledger kicked them so they don't play on empty data. Either way, just stop.
+
+`Session:Get()` gives you their data as it is right now. It's read-only: you change data with ops, never by editing what `Get` gives you.
+
+The loop at the bottom catches players who joined before the script started running.
+
+You don't need `BindToClose`. When the server shuts down, Ledger saves everyone for you.
+
+## Show gold on the leaderboard
+
+Now swap the `print` for a leaderstats folder, and keep it up to date:
+
+```luau
+local function OnPlayerAdded(Player: Player)
+	local Session = PlayerStore:Load(Player)
+	if not Session then
+		return -- they left while loading, or the load failed and they were kicked
+	end
+
+	local Leaderstats = Instance.new("Folder")
+	Leaderstats.Name = "leaderstats"
+
+	local Gold = Instance.new("IntValue")
+	Gold.Name = "Gold"
+	Gold.Value = Session:Get().Gold
+	Gold.Parent = Leaderstats
+
+	Leaderstats.Parent = Player
+
+	Session:Observe():Subscribe(function(Data)
+		Gold.Value = Data.Gold
+	end)
+end
+```
+
+`Session:Observe():Subscribe(...)` runs your function every time the player's data changes. It doesn't run straight away, which is why we set `Gold.Value` from `Get()` first.
+
+## Give the player gold
+
+Last, give the player 100 gold every time they join. Add a constant at the top of the script:
+
+```luau
+local JOIN_GOLD = 100
+```
+
+And one line at the end of `OnPlayerAdded`:
+
+```luau
+	Session:Apply({ Kind = "AddGold", Amount = JOIN_GOLD })
+```
+
+`Session:Apply` changes the data straight away, so the leaderboard updates with it. Ledger saves it with the player's next save, within about 30 seconds.
+
+For things that must be saved before you move on, like a Robux purchase, use `Session:Commit` instead. That's covered in [Players](/docs/learn/players) and [Purchases](/docs/learn/purchases).
+
+Here's the whole script:
+
+```luau
+--!strict
+local Players = game:GetService("Players")
+local ServerStorage = game:GetService("ServerStorage")
+
+local Stores = require(ServerStorage.Stores)
+
+local PlayerStore = Stores.PlayerStore
+
+local JOIN_GOLD = 100
+
+local function OnPlayerAdded(Player: Player)
+	local Session = PlayerStore:Load(Player)
+	if not Session then
+		return -- they left while loading, or the load failed and they were kicked
+	end
+
+	local Leaderstats = Instance.new("Folder")
+	Leaderstats.Name = "leaderstats"
+
+	local Gold = Instance.new("IntValue")
+	Gold.Name = "Gold"
+	Gold.Value = Session:Get().Gold
+	Gold.Parent = Leaderstats
+
+	Leaderstats.Parent = Player
+
+	Session:Observe():Subscribe(function(Data)
+		Gold.Value = Data.Gold
+	end)
+
+	Session:Apply({ Kind = "AddGold", Amount = JOIN_GOLD })
+end
+
+local function OnPlayerRemoving(Player: Player)
+	PlayerStore:Unload(Player)
+end
+
+Players.PlayerAdded:Connect(OnPlayerAdded)
+Players.PlayerRemoving:Connect(OnPlayerRemoving)
+
+for _, Player in Players:GetPlayers() do
+	task.spawn(OnPlayerAdded, Player)
+end
+```
+
+Next: [Your data](/docs/learn/your-data)

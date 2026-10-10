@@ -1,0 +1,118 @@
+---
+title: Answers
+description: What Ledger gives back when you change data, and what to do with each answer.
+---
+
+Every call that changes data gives back the same three things:
+
+```luau
+local Ok, Result, Info = Session:Commit(Op)
+```
+
+- **`Ok`** is `true` if the change went through, and `false` if it didn't.
+- **`Result`**: when `Ok` is `false`, this is the reason, a short string like `"Refused"`. When `Ok` is `true`, it's something useful for that call, like the new data for `Commit`.
+- **`Info`** has extra details when `Ok` is `false`. You'll mostly use it for `"Unresolved"`, below.
+
+There are 15 reasons, and each one means the same thing on every call. Compare with `Ledger.Reason`, so a typo shows up in Studio instead of silently never matching:
+
+```luau
+if Result == Ledger.Reason.Refused then
+```
+
+## A full example
+
+Here's the rare shop from [Players](/docs/learn/players), now handling its answers:
+
+```luau
+local function OnBuyRare(Player: Player)
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return -- still loading
+	end
+
+	local Ok, Result, Info = Session:Commit({ Kind = "BuyItem", Item = RARE_ITEM, Price = RARE_PRICE })
+	if Ok then
+		print(Player.Name, "bought the dragon")
+		return
+	end
+
+	if Result == Ledger.Reason.Refused then
+		print(Player.Name, "can't afford the dragon")
+		return
+	end
+
+	if Result == Ledger.Reason.Unresolved and Info and Info.Outcome then
+		print(Player.Name, "'s purchase is still saving")
+
+		local Saved, Why = Info.Outcome:Wait()
+		if not Saved then
+			print(Player.Name, "'s purchase didn't go through:", Why)
+			return
+		end
+
+		print(Player.Name, "bought the dragon")
+		return
+	end
+
+	warn(Player.Name, "couldn't buy the dragon:", Result)
+end
+```
+
+Most of your code only needs to handle a few reasons. Anything else is rare, so a `warn` is enough.
+
+## The ones you'll see
+
+| Reason | What it means | What to do |
+|---|---|---|
+| `Refused` | Your reducer returned `nil`. Nothing changed. | Tell the player why, like "not enough gold". |
+| `Unresolved` | The save didn't answer in time, usually because DataStores are having trouble. The change might still go through. | Nothing. Ledger keeps sending it. Use `Info.Outcome` if you want to know how it ends. |
+| `Busy` | Ledger couldn't send it right now. Nothing was sent. | Let the player try again in a moment. |
+| `Closed` | The server is shutting down. Nothing was sent. | Nothing. |
+| `Missing` | The data doesn't exist, on a store with `MustExist = true`. | Create it first, or check the key. |
+| `Backlog` | `Apply` only: this player has thousands of changes waiting to save. Nothing was added. | Call `Session:Flush()`, then apply again. |
+
+## `Unresolved`
+
+`Unresolved` doesn't mean it failed. It means Ledger doesn't know yet, and it keeps sending the change until it finds out. **Don't send it again yourself**, or the player could get it twice.
+
+If you want to know how it ended, wait on `Info.Outcome`:
+
+```luau
+	if Result == Ledger.Reason.Unresolved and Info and Info.Outcome then
+		print(Player.Name, "'s purchase is still saving")
+
+		local Saved, Why = Info.Outcome:Wait()
+		if not Saved then
+			print(Player.Name, "'s purchase didn't go through:", Why)
+			return
+		end
+
+		print(Player.Name, "bought the dragon")
+		return
+	end
+```
+
+`Outcome:Wait()` gives back `true` once it's saved, or `false` and a reason if it didn't go through. It yields, so it's fine inside a remote handler like this one, but don't call it anywhere that has to answer straight away.
+
+`Apply` never answers `Unresolved`: it only queues the change, and the next save takes care of it.
+
+In a long DataStore outage, a few minutes or more, an `Unresolved` change can be lost. For things that must never be lost, like Robux purchases, keep a record in the player's data. [Once only](/docs/learn/once-only) shows how, and [Purchases](/docs/learn/purchases) does it for Robux.
+
+## Telling the player why
+
+`Refused` doesn't say which rule failed. If you want to show a message, check the same thing in your script before you send the change, like [Bigger reducers](/docs/learn/bigger-reducers#telling-the-player-why) does.
+
+## The rest
+
+You won't see these unless you use the feature they belong to:
+
+| Reason | What it means |
+|---|---|
+| `Full` | The data would go over about 4 MB. Nothing changed. |
+| `Invalid` | The change can't be saved, like a table with a function in it. Fix your code. |
+| `Behind` | A newer version of your game changed this data's shape, and this server is older. See [Changing your data](/docs/learn/changing-data). |
+| `Unreadable` | This server can't read the saved data. Ledger warns with the key. See [Changing your data](/docs/learn/changing-data). |
+| `Spent`, `Expired`, `NoRoom` | About named changes. See [Once only](/docs/learn/once-only). |
+| `Short`, `SoldOut` | About limited items. See [Limited items](/docs/learn/limited-items). |
+
+Next: [Once only](/docs/learn/once-only)

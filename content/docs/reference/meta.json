@@ -1,4 +1,4 @@
 {
   "title": "Reference",
-  "pages": ["ledger", "store", "session", "future", "observer", "types"]
+  "pages": ["ledger", "store", "session", "quantity", "observers", "types"]
 }

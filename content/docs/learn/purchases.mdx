@@ -1,0 +1,174 @@
+---
+title: Purchases
+description: Give players what they paid for exactly once, even if a server crashes halfway through.
+---
+
+Roblox sends your game a receipt for every developer product purchase. If you don't say the purchase was granted, Roblox sends the same receipt again the next time that player buys something or joins one of your servers. So the same receipt can arrive more than once. This page makes sure the player gets paid exactly once.
+
+It's the record pattern from [Once only](/docs/learn/once-only): remember each purchase id in the player's data, and refuse any id you've already seen.
+
+## Add the op
+
+```luau
+export type PlayerData = {
+	Gold: number,
+	Receipts: { string },
+}
+
+type PlayerOps = {
+	GrantPurchase: { PurchaseId: string, Gold: number },
+}
+
+local RECEIPTS_KEPT = 1000
+
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	Name = "PlayerData",
+	Keys = "Player",
+	Default = { Gold = 0, Receipts = {} },
+	MustExist = false,
+	Erasable = true,
+	Reducer = function(Data, Op)
+		if Op.Kind == "GrantPurchase" then
+			if table.find(Data.Receipts, Op.PurchaseId) then
+				return nil -- already granted
+			end
+
+			local Receipts = table.clone(Data.Receipts)
+			table.insert(Receipts, Op.PurchaseId)
+			if #Receipts > RECEIPTS_KEPT then
+				table.remove(Receipts, 1) -- forget the oldest
+			end
+
+			local New = table.clone(Data)
+			New.Gold += Op.Gold
+			New.Receipts = Receipts
+			return New
+		end
+
+		return nil
+	end,
+})
+```
+
+The reducer gives the gold and remembers the purchase id in `Receipts`, in one change. If the same receipt comes in again, the id is already there, so it returns `nil` and the player isn't paid twice.
+
+That also covers the rarer cases: Roblox running the same receipt on two servers at once when the player switches servers mid-purchase, or Roblox failing to record that you granted it and sending the receipt again. Only the first one ever gets through.
+
+`Receipts` keeps the last 1,000 ids, so it never grows without end. Roblox resends an ungranted receipt the next time the player buys something or joins, so the resend arrives long before 1,000 newer purchases could push its id out.
+
+## Handle the receipt
+
+Roblox has two ways to handle developer product receipts: the newer `BindReceiptHandler`, and the older `ProcessReceipt` callback. Use `BindReceiptHandler` in a new game. If yours already uses `ProcessReceipt`, the second tab has it. The Ledger part is the same in both.
+
+<Tabs items={['BindReceiptHandler', 'ProcessReceipt']}>
+<Tab value="BindReceiptHandler">
+
+```luau
+-- Product id to how much gold it gives.
+local PRODUCTS: { [number]: number } = {
+	[123456] = 100,
+	[123457] = 500,
+}
+
+type Receipt = {
+	PlayerId: number,
+	ProductId: number,
+	PurchaseId: string,
+}
+
+local function HandleReceipt(Receipt: Receipt): Enum.ReceiptDecision
+	local Gold = PRODUCTS[Receipt.ProductId]
+	if not Gold then
+		return Enum.ReceiptDecision.NotProcessedYet
+	end
+
+	local Ok, Result, Info = PlayerStore:Edit(Receipt.PlayerId, {
+		Kind = "GrantPurchase",
+		PurchaseId = Receipt.PurchaseId,
+		Gold = Gold,
+	})
+
+	if Ok then
+		return Enum.ReceiptDecision.Processed
+	end
+
+	if Result == Ledger.Reason.Refused and Info and Info.State then
+		if table.find(Info.State.Receipts, Receipt.PurchaseId) then
+			return Enum.ReceiptDecision.Processed -- granted on an earlier try
+		end
+	end
+
+	return Enum.ReceiptDecision.NotProcessedYet
+end
+
+MarketplaceService:BindReceiptHandler(Enum.ReceiptType.DeveloperProduct, HandleReceipt)
+```
+
+</Tab>
+<Tab value="ProcessReceipt">
+
+```luau
+-- Product id to how much gold it gives.
+local PRODUCTS: { [number]: number } = {
+	[123456] = 100,
+	[123457] = 500,
+}
+
+type Receipt = {
+	PlayerId: number,
+	ProductId: number,
+	PurchaseId: string,
+}
+
+local function ProcessReceipt(Receipt: Receipt): Enum.ProductPurchaseDecision
+	local Gold = PRODUCTS[Receipt.ProductId]
+	if not Gold then
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	local Ok, Result, Info = PlayerStore:Edit(Receipt.PlayerId, {
+		Kind = "GrantPurchase",
+		PurchaseId = Receipt.PurchaseId,
+		Gold = Gold,
+	})
+
+	if Ok then
+		return Enum.ProductPurchaseDecision.PurchaseGranted
+	end
+
+	if Result == Ledger.Reason.Refused and Info and Info.State then
+		if table.find(Info.State.Receipts, Receipt.PurchaseId) then
+			return Enum.ProductPurchaseDecision.PurchaseGranted -- granted on an earlier try
+		end
+	end
+
+	return Enum.ProductPurchaseDecision.NotProcessedYet
+end
+
+MarketplaceService.ProcessReceipt = ProcessReceipt
+```
+
+</Tab>
+</Tabs>
+
+This uses `PlayerStore:Edit` instead of a session. `Edit` changes any player's data, whether they're in this server, in another server, or offline, and saves before it answers. The player may have left by the time it runs, so that matters here. If the player is in this server, their session shows the gold straight away.
+
+What each answer does:
+
+- **`true`**: the gold is saved. Tell Roblox it's done (`Processed`, or `PurchaseGranted` with `ProcessReceipt`).
+- **`Refused`, and the id is in `Info.State.Receipts`**: an earlier try already went through. Tell Roblox it's done. `Info.State` is the player's data as Ledger saw it when it said no.
+- **Anything else**, like `Unresolved` in an outage: tell Roblox it's not processed yet. Roblox calls again the next time the player buys something or joins, and the receipt list makes that safe.
+
+## Don't show gold before it's saved
+
+```luau
+-- Wrong: the gold shows up before it's saved
+Player.leaderstats.Gold.Value += Gold
+PlayerStore:Edit(Player.UserId, Op)
+```
+
+If the server crashes between those two lines, the player sees the gold and then loses it when they rejoin. If Roblox calls again, the screen can count it twice.
+
+You don't need to touch leaderstats at all. The `Observe` from [Getting started](/docs/learn/getting-started) updates them once the gold is really in the player's data.
+
+Next: [Trading](/docs/learn/trading)

@@ -1,0 +1,240 @@
+---
+title: Your data
+description: What goes in a store, how ops and the reducer work, and the rules your reducer has to follow.
+---
+
+On the last page the player only had gold. Let's give them an inventory too, and a way to buy things. Here's the `Stores` module again with both:
+
+```luau
+--!strict
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Ledger = require(ReplicatedStorage.Ledger)
+
+export type PlayerData = {
+	Gold: number,
+	Inventory: { [string]: number },
+}
+
+type PlayerOps = {
+	AddGold: { Amount: number },
+	SpendGold: { Amount: number },
+	BuyItem: { Item: string, Price: number },
+}
+
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	Name = "PlayerData",
+	Keys = "Player",
+	Default = { Gold = 0, Inventory = {} },
+	MustExist = false,
+	Erasable = true,
+	Reducer = function(Data, Op)
+		if Op.Kind == "AddGold" then
+			local New = table.clone(Data)
+			New.Gold += Op.Amount
+			return New
+		end
+
+		if Op.Kind == "SpendGold" then
+			if Data.Gold < Op.Amount then
+				return nil -- not enough gold
+			end
+
+			local New = table.clone(Data)
+			New.Gold -= Op.Amount
+			return New
+		end
+
+		if Op.Kind == "BuyItem" then
+			if Data.Gold < Op.Price then
+				return nil -- not enough gold
+			end
+
+			local Inventory = table.clone(Data.Inventory)
+			Inventory[Op.Item] = (Inventory[Op.Item] or 0) + 1
+
+			local New = table.clone(Data)
+			New.Gold -= Op.Price
+			New.Inventory = Inventory
+			return New
+		end
+
+		return nil
+	end,
+})
+
+return {
+	PlayerStore = PlayerStore,
+}
+```
+
+## What you can save
+
+`PlayerData` is the shape of one player's data, and `Default` is what a new player starts with.
+
+You can save numbers, strings, booleans, and tables of those, up to about 4 MB per player. The same rules as DataStores apply: no Instances, Vector3s or functions, no holes in arrays, and a table can't mix array and string keys.
+
+Every field your data will ever have needs to be in `Default`. If a field has no value at the start, give it an empty one, like `0`, `""` or `{}`. A reducer that sets a field `Default` doesn't have is refused, and Ledger warns you in the output.
+
+## Ops
+
+An op is one change to a player's data. `PlayerOps` lists every kind of op, and what each one carries:
+
+```luau
+type PlayerOps = {
+	AddGold: { Amount: number },
+	SpendGold: { Amount: number },
+	BuyItem: { Item: string, Price: number },
+}
+```
+
+When you send one, you give its `Kind` and its fields:
+
+```luau
+Session:Apply({ Kind = "BuyItem", Item = "Sword", Price = 50 })
+```
+
+Because the ops are typed, a typo in a kind or a missing field shows up in Studio's script analysis before you ever run the game.
+
+## The reducer
+
+The reducer is the only place your data changes. It gets the player's current data and an op, and returns one of two things:
+
+- **The new data**, if the op is allowed.
+- **`nil`**, if it isn't. The op does nothing, and the call that sent it gets back `false`.
+
+Notice that each branch starts with `table.clone(Data)` and changes the copy. That's on purpose, because of the rules below. If your reducer grows past a handful of ops, [Bigger reducers](/docs/learn/bigger-reducers) shows how to keep it short.
+
+## Reducer rules
+
+Ledger may run your reducer more than once for the same op, so it has to give the same answer every time:
+
+- **Never change `Data` or `Op` directly.** Copy the table you're changing with `table.clone`, like `Inventory` above, and return the copy.
+- **Return every field.** Cloning `Data` first takes care of that.
+- **No randomness and no clock.** Don't use `math.random`, `os.time` or `tick()` in a reducer. Work it out in your script and put the result in the op. For a loot drop, roll the item in your script and send `{ Kind = "AddItem", Item = Rolled }`.
+- **No waiting, no Ledger calls, nothing outside the data.** Don't fire remotes, print, or change parts from a reducer. Do that in your script after the call answers, or in `Observe`.
+- **Return `nil` for kinds you don't know.** That's the `return nil` at the bottom.
+
+If your reducer errors, Ledger treats it as `nil` and the op is refused. It won't print the error, so wrap risky code in `pcall` while you debug.
+
+Studio helps you catch broken rules. There, your reducer runs three times per op and Ledger warns you if the answers differ. `Data` and `Op` are also read-only in Studio, so a reducer that changes them directly gets every op refused.
+
+## Using it
+
+Here's a shop that sells through the new op. The price comes from the server, never from the client:
+
+```luau
+--!strict
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+
+local Stores = require(ServerStorage.Stores)
+
+local PlayerStore = Stores.PlayerStore
+
+local BuyItemEvent = ReplicatedStorage:WaitForChild("BuyItem") :: RemoteEvent
+
+local PRICES: { [string]: number } = {
+	Sword = 50,
+	Shield = 80,
+}
+
+local function OnBuyItem(Player: Player, Item: unknown)
+	if type(Item) ~= "string" then
+		return
+	end
+
+	local Price = PRICES[Item]
+	if not Price then
+		return -- not something we sell
+	end
+
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return -- still loading
+	end
+
+	local Ok = Session:Apply({ Kind = "BuyItem", Item = Item, Price = Price })
+	if not Ok then
+		print(Player.Name, "can't afford a", Item)
+	end
+end
+
+BuyItemEvent.OnServerEvent:Connect(OnBuyItem)
+```
+
+If the player can't afford it, the reducer returns `nil` and `Apply` gives back `false`. Their gold and inventory stay as they were.
+
+## Balances: let Ledger handle gold
+
+Most games have a few numbers that only ever go up or down by an amount: gold, gems, coins. Instead of writing reducer code for those, you can tell Ledger which ops add and which take away, and it handles them for you:
+
+```luau
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	Name = "PlayerData",
+	Keys = "Player",
+	Default = { Gold = 0, Inventory = {} },
+	MustExist = false,
+	Erasable = true,
+	Balances = {
+		Gold = { Credit = "AddGold", Debit = "SpendGold" },
+	},
+	Reducer = function(Data, Op)
+		-- AddGold and SpendGold never get here: Ledger applies them.
+		-- ... your other ops, like BuyItem
+		return nil
+	end,
+})
+```
+
+- **`Credit`** ops add their `Amount` to the field. **`Debit`** ops take it away.
+- A debit that would take the field below 0 is refused, like the "not enough gold" check you'd write yourself.
+- `Amount` must be a whole number above 0. Anything else throws when you send the op.
+- Keep the ops in `PlayerOps` as usual, with `{ Amount: number }`, so they stay type checked.
+
+Plain ops can still change `Gold` too, like `BuyItem` taking the price. Ledger's limits don't apply to those, so the reducer checks them itself, as before.
+
+### Limits
+
+Give the field a `Min` or a `Max` to change the limits. Here, gold can never go above a million:
+
+```luau
+	Balances = {
+		Gold = { Credit = "AddGold", Debit = "SpendGold", Max = 1000000 },
+	},
+```
+
+An `AddGold` that would pass the `Max` is refused.
+
+You can list several ops, and give one op limits of its own by writing it as a table. Here a `Refund` always goes through, even above the cap:
+
+```luau
+local NO_LIMIT = 2 ^ 53 - 1
+
+	Balances = {
+		Gold = {
+			Credit = { "AddGold", { Kind = "Refund", Max = NO_LIMIT } },
+			Debit = "SpendGold",
+			Max = 1000000,
+		},
+	},
+```
+
+`Min` and `Max` are limits on the field, not on one op: `Max = 1000000` means the gold can't go above a million, not that one op can't add more than a million.
+
+### Why bother
+
+For one player's gold, a reducer works just as well. Balances start to matter in [trades](/docs/learn/trading): while a trade is in progress, it holds the player's data until it finishes, and their other changes wait. A gold op in a trade doesn't hold anything. It only sets the amount aside, so the player can keep earning and spending meanwhile. Shops, auctions and guild banks that many servers trade with at once rely on that, as in [Auctions and markets](/docs/guides/auctions-and-markets).
+
+## `MustExist` and `Erasable`
+
+Every store has to say these two:
+
+| Option | `true` | `false` |
+|---|---|---|
+| `MustExist` | The data must already exist. Loading or changing a key with no data fails with `Missing`. | Data that doesn't exist yet starts from `Default`, and is saved the first time it changes. |
+| `Erasable` | You can delete a key's data for good with `Erase`, for example for a GDPR request. | `Erase` isn't allowed. |
+
+For player data, use `MustExist = false` and `Erasable = true`. Pick `Erasable` before your game goes live: turning it on later takes extra care, covered in [Deleting data](/docs/learn/deleting-data).
+
+Next: [Players](/docs/learn/players)

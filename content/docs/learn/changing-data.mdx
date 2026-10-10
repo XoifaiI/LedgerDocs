@@ -1,0 +1,163 @@
+---
+title: Changing your data
+description: Add or rename fields after your game is live, without breaking players who already have data.
+---
+
+Once your game is live, players have saved data in the shape you shipped. When you add a field, rename one, or restructure a table in an update, their saved data needs to change to match. That's what this page is about.
+
+## Why you need a migration
+
+Changing `Default` only changes what new players start with. A player who saved yesterday still has yesterday's data, without your new field. Your reducer would then find `nil` where it expects a table.
+
+A migration fixes that. It's a function that takes a player's old saved data and returns it in the new shape. Ledger runs it the first time that player's data is read after your update.
+
+## Adding a field
+
+Say version 1 shipped with `Gold`, and version 2 adds `Pets`. Update the type and `Default` as usual, and add a `Migrations` list to the store:
+
+```luau
+type Saved = { [string]: any }
+
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	Name = "PlayerData",
+	Keys = "Player",
+	Default = { Gold = 0, Pets = {} },
+	MustExist = false,
+	Erasable = true,
+	Migrations = {
+		-- 1: version 2 added Pets.
+		{
+			Fields = { "Pets" },
+			Run = function(Stored: unknown): unknown
+				local New = table.clone(Stored :: Saved)
+				New.Pets = {}
+				return New
+			end,
+		},
+	},
+	Reducer = ...,
+})
+```
+
+`Fields` lists the new top-level fields this migration adds. Listing them tells Ledger the change is safe for servers still running version 1: they keep working, and leave `Pets` alone.
+
+## Renaming or reshaping a field
+
+Version 3 renames `Gold` to `Coins`. Old servers would look for `Gold` and not find it, so this is a breaking change. Add it to the end of the list with `IsBreaking = true`:
+
+```luau
+	Migrations = {
+		-- 1: version 2 added Pets.
+		{
+			Fields = { "Pets" },
+			Run = function(Stored: unknown): unknown
+				local New = table.clone(Stored :: Saved)
+				New.Pets = {}
+				return New
+			end,
+		},
+		-- 2: version 3 renamed Gold to Coins.
+		{
+			IsBreaking = true,
+			Run = function(Stored: unknown): unknown
+				local New = table.clone(Stored :: Saved)
+				New.Coins = New.Gold
+				New.Gold = nil
+				return New
+			end,
+		},
+	},
+```
+
+A player whose data has been through a breaking migration can't be loaded by an older server. That server answers `Behind` for them instead of reading data it doesn't understand.
+
+Use a breaking migration for anything that isn't a new top-level field: a rename, a removed field, a changed type, or a new field inside a table you already have.
+
+## Update the rest of your code too
+
+Migrations run before your code ever sees the data, so everything else only deals with the newest shape. When you rename `Gold` to `Coins`:
+
+- Change `PlayerData` and `Default` to use `Coins`.
+- Change the reducer to read and write `Coins`.
+- Change every other script that reads `Gold`, like your leaderstats.
+
+```luau
+-- in the reducer:
+if Op.Kind == "AddCoins" then
+	local New = table.clone(Data)
+	New.Coins += Op.Amount
+	return New
+end
+```
+
+Studio's script analysis points out every place that still uses `Gold`, because it's no longer in `PlayerData`.
+
+## The rules
+
+- **Only add to the end.** Never change, remove or reorder a migration that has shipped. Ledger knows them by their place in the list.
+- **One kind of change per migration.** A new field and a rename are two migrations.
+- **Keep `Run` simple.** It only turns data into data. No waiting, and no Ledger calls.
+- **`Run` must work.** If it errors or returns `nil`, that player's data can't be loaded: the load answers `Unreadable` and Ledger warns with the key. Nothing is lost. Fix the migration and publish again.
+- **Never change the store's `Name` or `Keys`.** A new name is a new, empty store.
+
+## Publishing the update
+
+Roblox doesn't update every server at once, so old and new servers run side by side for a while.
+
+- **Only new fields:** publish as usual. Old servers keep working.
+- **Anything breaking:** publish, then shut down all servers from the Creator Hub, so everyone rejoins on the new version.
+
+If you don't shut down, a player whose data is newer than the server they join can't load there. They're kicked with your `KickMessage`, so make it say what to do:
+
+```luau
+	KickMessage = "The game just updated. Please rejoin.",
+```
+
+## Data from before Ledger
+
+Ledger can't read data your game saved with plain DataStore calls or another library. Use a new store `Name`, and copy each player's old data in the first time they join, with an op that only works once:
+
+```luau
+-- in the reducer:
+if Op.Kind == "Import" then
+	if Data.IsImported then
+		return nil -- already done
+	end
+
+	return { Gold = Data.Gold + Op.Gold, IsImported = true }
+end
+```
+
+```luau
+local OldStore = DataStoreService:GetDataStore("PlayerData")
+
+local function OnPlayerAdded(Player: Player)
+	local Session = PlayerStore:WaitForLoaded(Player)
+	if not Session or Session:Get().IsImported then
+		return
+	end
+
+	local IsRead, Old = pcall(function()
+		return OldStore:GetAsync(tostring(Player.UserId))
+	end)
+	if not IsRead then
+		Player:Kick("We couldn't load your old data. Please rejoin in a minute.")
+		return
+	end
+
+	local OldGold = if type(Old) == "table" and type(Old.Gold) == "number" then Old.Gold else 0
+	Session:Commit({ Kind = "Import", Gold = OldGold })
+end
+
+Players.PlayerAdded:Connect(OnPlayerAdded)
+```
+
+Add `IsImported = false` to `Default`. The reducer refuses a second import, so it's safe if the player joins two servers at once. A player who never had old data gets 0, and is marked imported too.
+
+Change the `GetAsync` key and the fields to match how your game saved them.
+
+## Updating Ledger itself
+
+Read the [release notes](/docs/releases) first. Then publish every place in your game with the new Ledger at once, and shut down all servers.
+
+Next: [Deleting data](/docs/learn/deleting-data)

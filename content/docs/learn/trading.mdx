@@ -1,0 +1,165 @@
+---
+title: Trading
+description: Swap items and gold between two players, all or nothing.
+---
+
+A trade changes two players' data at once. If you do that with two separate calls and the server crashes in between, one player can lose their item without getting paid. `Ledger.Tx` changes both together: either both changes happen, or neither does.
+
+## The ops
+
+Each player in the trade gets one op. Here the seller gives up an item and gets gold, and the buyer does the opposite:
+
+```luau
+type PlayerOps = {
+	SellItem: { Item: string, Price: number },
+	BuyItem: { Item: string, Price: number },
+}
+
+	Reducer = function(Data, Op)
+		if Op.Kind == "SellItem" then
+			local Count = Data.Inventory[Op.Item]
+			if not Count then
+				return nil -- they don't have it
+			end
+
+			local Inventory = table.clone(Data.Inventory)
+			if Count > 1 then
+				Inventory[Op.Item] = Count - 1
+			else
+				Inventory[Op.Item] = nil
+			end
+
+			local New = table.clone(Data)
+			New.Gold += Op.Price
+			New.Inventory = Inventory
+			return New
+		end
+
+		if Op.Kind == "BuyItem" then
+			if Data.Gold < Op.Price then
+				return nil -- not enough gold
+			end
+
+			local Inventory = table.clone(Data.Inventory)
+			Inventory[Op.Item] = (Inventory[Op.Item] or 0) + 1
+
+			local New = table.clone(Data)
+			New.Gold -= Op.Price
+			New.Inventory = Inventory
+			return New
+		end
+
+		return nil
+	end,
+```
+
+These are normal ops with normal reducer rules. Each side checks its own player: the seller must have the item, and the buyer must have the gold.
+
+## The trade
+
+Put this in a ModuleScript, `ServerStorage.Trading`:
+
+```luau
+-- Saves anything waiting for this player, if they're in this server.
+local function FlushIfHere(UserId: number)
+	local Player = Players:GetPlayerByUserId(UserId)
+	if not Player then
+		return
+	end
+
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return
+	end
+
+	Session:Flush()
+end
+
+-- Shows this player their latest saved data, if they're in this server.
+local function RefreshIfHere(UserId: number)
+	local Player = Players:GetPlayerByUserId(UserId)
+	if not Player then
+		return
+	end
+
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return
+	end
+
+	Session:Refresh()
+end
+
+local function Trade(SellerId: number, BuyerId: number, Item: string, Price: number): boolean
+	FlushIfHere(SellerId)
+	FlushIfHere(BuyerId)
+
+	local Ok, Result, Info = Ledger.Tx({
+		PlayerStore:Leg(SellerId, { Kind = "SellItem", Item = Item, Price = Price }),
+		PlayerStore:Leg(BuyerId, { Kind = "BuyItem", Item = Item, Price = Price }),
+	})
+
+	if Result == Ledger.Reason.Unresolved and Info and Info.Outcome then
+		Ok, Result = Info.Outcome:Wait()
+	end
+
+	RefreshIfHere(SellerId)
+	RefreshIfHere(BuyerId)
+
+	if Ok then
+		return true
+	end
+
+	if Result == Ledger.Reason.Refused and Info and Info.Key then
+		local SellerSaidNo = tostring(Info.Key.Key) == tostring(SellerId)
+		if SellerSaidNo then
+			print("The seller doesn't have a", Item)
+			return false
+		end
+
+		print("The buyer can't afford it")
+		return false
+	end
+
+	warn("Trade failed:", Result)
+	return false
+end
+```
+
+`Trade` takes UserIds, not players. A trade doesn't need either player to be in this server, or online at all: the buyer could be in another server, and the seller could be offline selling from a market listing. Ledger changes their saved data either way.
+
+`PlayerStore:Leg(UserId, Op)` describes one player's side of the trade. `Ledger.Tx` takes the list and applies every side, or none.
+
+A two-player trade costs 2 DataStore requests.
+
+## Players in this server
+
+A trade works on the players' saved data, not on what their sessions are showing. So for a player who's in this server:
+
+- **Before:** `Flush` their session, so anything `Apply` has waiting is saved and the trade sees it.
+- **After:** `Refresh` their session, so they see the trade straight away.
+
+`FlushIfHere` and `RefreshIfHere` do that, and do nothing for a player who isn't here. They look the session up fresh each time, because a player can leave while the trade runs.
+
+A `Flush` costs a DataStore request when the player has changes waiting, and nothing when they don't. If your game trades a lot, that adds up. You can skip it, but then a change `Apply` still had waiting can be undone at the next save if the trade already spent the same gold.
+
+A player in another server sees the trade within about 2 minutes. To show it sooner, send a message and refresh them there, like the [gift example](/docs/learn/shared-data#gifts-to-players-in-other-servers). An offline player sees it next time they join.
+
+If that other server still has `Apply` changes waiting for the player, they're checked again against the traded data when they save. So a player can't spend the same gold in a trade and in another server at once.
+
+## Answers
+
+| Answer | What it means |
+|---|---|
+| `true` | Both sides happened. |
+| `Refused` | One side's reducer said no. Nothing happened to either player. `Info.Key.Key` is the UserId of the player whose side said no. |
+| `Unresolved` | Ledger doesn't know yet, and keeps going until it does. When it finishes, either both sides happened or neither did. Wait on `Info.Outcome` if you want to know. In a long outage that can take a while. |
+| `Spent` | The trade stopped without going through, for a reason that isn't your rules. Nothing happened. It's safe to try again. |
+
+Everything else means the same as on [Answers](/docs/learn/answers), and nothing happened to either player.
+
+## Not just players
+
+A leg can be any key in any store, so the same code moves gold from a player into a [guild bank](/docs/learn/shared-data), or between three players at once. Each key can only be in a trade once.
+
+Next: [Shared data](/docs/learn/shared-data)

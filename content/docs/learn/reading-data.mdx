@@ -1,0 +1,96 @@
+---
+title: Reading data
+description: Show another player's data or a guild's, and keep a screen up to date as it changes.
+---
+
+For a player in this server, you already have their data: `Session:Get()`, from [Players](/docs/learn/players). This page is for everything else: a player in another server or offline, like a profile card or a friend list, or [shared data](/docs/learn/shared-data) like a guild.
+
+## Reading a key with `Peek`
+
+```luau
+local function GoldOf(UserId: number): number?
+	local Data, Why = PlayerStore:Peek(UserId)
+	if Data then
+		return Data.Gold
+	end
+
+	if Why == "Missing" then
+		return 0 -- never played
+	end
+
+	return nil -- couldn't read it right now
+end
+```
+
+`Peek` reads the saved data and answers it, or `nil` and a reason. It doesn't load a session, so it works on any player, wherever they are.
+
+The data is read-only. To change it, use `Edit`, as on [Shared data](/docs/learn/shared-data).
+
+For a player in a session somewhere, `Peek` gives what was last saved. That can be a little behind what the player sees, until their next save.
+
+## When `Peek` says no
+
+`nil` never means "empty", so always look at the reason:
+
+| Reason | What it means | What to do |
+|---|---|---|
+| `Missing` | Nothing was ever saved for this key, or it was deleted. | Treat it as new. `Peek` never gives you `Default`. |
+| `Unresolved` | The read didn't finish, usually because the DataStore is having trouble. | Show nothing for now and try again later. |
+| `Behind` | A newer version of your game has saved this key, and this server is running old code. | Don't show it: this server's copy is out of date. |
+| `Busy`, `Closed` | This server can't read right now, or is shutting down. | Try again later, or stop. |
+
+[Answers](/docs/learn/answers) has the rest.
+
+## Reading a popular key
+
+A plain `Peek` costs one DataStore read every time. That's fine for a profile card someone opens now and then.
+
+For a key that many servers read all the time, like the top player on a global leaderboard or a big guild's page, give `Peek` a number of seconds:
+
+```luau
+local Data, Why = GuildStore:Peek(GuildId, 30)
+```
+
+If this server read the key in the last 30 seconds, it answers that again for free. Otherwise it reads a copy that all your servers share, which is usually under a minute old, and a few minutes on a key that hasn't changed in a while. Either way, most of these reads cost no DataStore request at all.
+
+Only do this for keys that really are read a lot. The first server to read a key this way keeps the shared copy up to date for the next 30 minutes, which costs it 2 DataStore reads a minute. For a key that's only read now and then, that's far more than a plain `Peek` costs.
+
+## Keeping a screen up to date with `Follow`
+
+To show something that changes, like a guild's bank on a board every member can see, follow the key instead of reading it over and over:
+
+```luau
+local function WatchGuild(GuildId: string, OnChange: (Gold: number) -> ())
+	return GuildStore:Follow(GuildId):Subscribe(function(Value)
+		if Value == "Behind" then
+			return -- a newer version of the game owns this guild
+		end
+
+		OnChange(Value.Gold)
+	end)
+end
+```
+
+```luau
+local Connection = WatchGuild("guild-123", function(Gold)
+	BankLabel.Text = `Guild bank: {Gold}`
+end)
+
+-- when the board closes
+Connection:Disconnect()
+```
+
+Your function is called with the data soon after you subscribe, so you don't need a `Peek` first. Then it's called again each time the data changes. A change shows up within about 30 seconds, or up to about 4 minutes on a key that hasn't changed in a while.
+
+A few things to know:
+
+- Your function can't yield. If you need to wait for something, start it with `task.spawn`.
+- It's never called for a key with no saved data.
+- `Follow` doesn't stop on its own. Call `Disconnect` when nobody is looking any more.
+- Following the same key twice in one server shares the work, so it costs no more.
+
+## Counters and limited items
+
+Global counters and limited-item stock have their own reads. See [Global counters](/docs/learn/global-counters) and [Limited items](/docs/learn/limited-items).
+
+Next: [Limited items](/docs/learn/limited-items)

@@ -1,161 +1,82 @@
 ---
 title: Releases
-description: What changed, and what you have to change with it.
+description: What changed from v6, and what you have to change with it.
 ---
 
-`+` is new, `-` is gone, `!` is something you have to know about before you upgrade.
+`+` is new in v7, `~` exists in v6 and works differently now, `-` is gone, `!` is something to know before you upgrade.
 
-## 6.2.0
+## 7.0.0
 
-A transaction makes one datastore call fewer, and a session notices an erase when it compacts. Most
-of this release is internal cleanup that you cannot see.
+Ledger 7 is rebuilt from scratch. It's cheaper, holds more, and every edge case we could find is tested.
+
+### Trades cost less than half
+
+| A trade between two players | v6 | v7 |
+|---|---|---|
+| DataStore requests | 8 | **2** |
+| MemoryStore requests | 8 | **0** |
+| Players or keys in one trade | up to 4 | **up to 29** |
+
+You can run about 4 times as many trades on the same DataStore budget, and they no longer use any MemoryStore.
+
+### More room
+
+- **4 MB per player instead of 2 MB.**
+- **No more `Full` from busy shared keys.** In v6 a guild bank or shop key could fill up after about 1,900 trades a day. That limit is gone.
+- **Busy keys stay usable.** In v6 a second trade on the same key got `Busy`. Now up to 16 can run on one key at once.
+
+### Limited items and global counters
+
+- **Quantities** sell a limited item from every server at once without overselling, with holds and checkout built in.
+- **Totals** count things across the whole game, like total gold spent, and reading them is free most of the time.
+
+### Clearer answers
+
+- Every call answers straight away with `(Ok, Result, Info)`. No more `:Wait()`.
+- 15 answers, each with one meaning and one thing to do. See [Answers](/docs/learn/answers).
+- When a save can't be confirmed yet, `Info.Outcome` tells you later whether it went through.
+- `Reset` and `Erase` tell you exactly what they deleted.
+
+### Harder to get wrong
+
+- With `--!strict`, your ops, reducer and calls are all type-checked.
+- `Erase` and `Reset` can't wipe a player by mistake when a request is retried.
+- Players' data saves on shutdown by itself. No `BindToClose` needed.
+
+### Every change
 
 ```diff
-+ A transaction makes one datastore call fewer. A two leg transaction now makes 8 calls instead of 9
-+ Session:Compact on a key another server erased closes the session and returns false with Refused, instead of true
-+ A store with BumpEvery does less work for each Bump that waits for its window
-+ An applied name from before 6.0 with no time Ledger can read counts as run out at once, instead of after the next write
++ Ledger.Now() and Ledger.BeforeClose()
++ Mock: run a server on the Mock package's in-memory DataStore and MemoryStore
++ Balances: number fields like gold that Ledger changes for you, with limits, and that never hold up a trade
++ Store:Keys(), Store:Losses(), Store:Pending(), Session:Refresh()
++ Quantities: Take, Hold, Confirm, Close, Deposit, Gather, Withdraw
++ Cut.Losses lists what Reset and Erase destroyed
++ Info.Outcome tells you what became of an Unresolved write
++ Six answers: Unreadable, Expired, NoRoom, Missing, Short, SoldOut
++ Peek(Key, { Fresh = true }) reads the newest saved data
+~ Every call answers (Ok, Result, Info), with no Future and no Wait. A read never means empty
+~ 15 answers instead of 10, all checked by Ledger.Reason
+~ Peek of a key that was never saved answers nil, Missing. It no longer gives the Default
+~ Ops are named with Id and IdAt in the options (Edit, Commit, Ledger.Tx)
+~ Ledger.Id() answers nil, Busy when it cannot make a name yet. Erase and Reset take one
+~ Reset and Erase answer a Cut
+~ Ledger.Tx, Bump, Total, Follow, Stale and Peek with MaxAge keep their names, with new answers
+~ Ledger.New<<Data, Ops>> type-checks every op you send against your Ops type
+~ TypeScript typings for roblox-ts, rebuilt for v7: @xoifail/ledger 7.0.0
+- Held, and calls that return a Future
+- Transfer, Reserve and Once. Use Ledger.Tx, quantities and named ops
+- EditOp, CommitOp, Session:Compact, Ledger.Sweep, History, PeekVersion
 
-! The error Session:Apply throws when your reducer yields is an error object now, not a string. Call tostring on it before you match its text
-! A 6.2 server does not look for a transaction marker that a 6.0.0 or older server wrote. Read Upgrading if a server still runs 6.0.0
+! Data written by v6 may read Unreadable or Behind. Use new store names for v7
+! Erase and Reset take only a Ledger.Id() name, or none. A string Id throws
+! A server answers Expired for its own Ledger.Id() name once it is 6 minutes old. Make the name just before you use it
+! For a quantity's counts use Store:Quantity(Name):Total(). Store:Total is for totals
+! A Final quantity must declare Stock
 ```
 
 ### Upgrading
 
-Install the new version. Your data needs no migration, and 6.2 servers can run beside 6.0.1 and 6.1
-servers.
+Plan for a rewrite of the calls, not a version bump. Start with [Getting started](/docs/learn/getting-started), then [Answers](/docs/learn/answers) and [Common mistakes](/docs/learn/common-mistakes).
 
-If a server still runs 6.0.0 or older, finish that deploy first. Those servers write each
-transaction marker under the transaction Id, and a 6.2 server does not look there. While both run, a
-6.2 server that drives an Id that an older server is still driving returns `Busy`. That lasts until
-the older run times out, about a minute later. Money is safe either way.
-
-If you `pcall` `Session:Apply` and read the error as a string, call `tostring` on it first.
-
-## 6.1.0
-
-There is now one `Ledger.New`. Give it your state and op types for a typed store, or call it plain
-for a store that takes any op. This release also closes a few ways a retry or a race could give the
-wrong result.
-
-```diff
-+ Ledger.New<<Profile, Ops>>(Options) builds a typed store. Ledger.New(Options) still builds an open one
-- Ledger.NewTyped. Use Ledger.New<<Profile, Ops>> instead
-+ EditOp, CommitOp and Confirm take IdAt, the time you first sent an op with your own Id. A retry that arrives after the key has dropped that id returns Unresolved instead of applying again
-+ Session:Commit compacts a full log once and tries again before it returns Full
-+ Session:Commit returns Unresolved when a parked transaction could still change whether its op applies, instead of true
-+ A write that arrives while a second Erase removes the key returns Busy
-
-! Ledger.NewTyped is gone. Rename each call to Ledger.New, with the same type arguments and options
-! Session:Commit can return Unresolved while a transaction is parked on the key. Don't call Commit again, read the key once it settles
-```
-
-### Upgrading
-
-Rename `Ledger.NewTyped` to `Ledger.New`. The arguments are the same, so nothing else changes. In
-TypeScript, `Ledger.NewTyped<Profile, Ops>(...)` becomes `Ledger.New<Profile, Ops>(...)`.
-
-Your data needs no migration, and 6.1 and 6.0 servers can run side by side. Until the deploy
-finishes, a 6.0 server ignores `IdAt` and the mark a second `Erase` leaves, and when it compacts a
-key it drops the record of which ids that key has forgotten. A 6.1 server starts that record again at
-its next compaction of the key, so finish the deploy before you rely on `IdAt`.
-
-If you retry `EditOp`, `CommitOp` or `Confirm` with your own `Id`, send `IdAt` with it. See
-[Why a retry is safe](/docs/concepts/handling-failure#why-a-retry-is-safe).
-
-## 6.0.1
-
-A small release. `Default` now only reaches new players, and cleaning up after transactions costs
-less.
-
-```diff
-+ Changing a value in Default no longer changes players who already have data. It only reaches new players
-+ A migration now reaches every player, including one whose data has not been compacted yet
-+ The reaper removes a transaction marker in one try instead of spending budget on retries
-+ Each run of a transaction gets a marker of its own, so the reaper only ever removes the one it checked
-+ The reaper checks that a marker has not changed since it looked before it removes it
-+ A transaction Id whose old marker is being cleaned up can run again straight away instead of answering Busy
-```
-
-### Upgrading
-
-Install the new version. Your data needs no migration.
-
-6.0.1 records a player's starting values the first time it saves them. Install it before you change
-a value in `Default`, so players who already have data keep the values they started with. A player
-that 6.0.1 has not saved yet takes the `Default` in place at that first save.
-
-A transaction Id reused for different terms answers `Busy` while its first run is still in progress,
-and `Spent` once that run went through.
-
-## 6.0.0
-
-Most of this release is guard rails. Ledger now stops more mistakes before they reach your data, and
-a busy shared key gets a lot cheaper.
-
-```diff
-+ A busy shared key folds about 30 times faster, and its applied names take about a quarter less room
-+ A key that is full answers Full to a transfer instead of growing until it stops taking writes
-+ Erase waits for money that is still on its way to another player, instead of taking it with the key
-+ A transfer Id that two senders share can no longer settle against the wrong delivery
-+ Calling Erase twice can no longer let a transfer be paid back after it arrived
-+ A migration that edits Ledger's own fields gets them put back, with a warning that names the step
-+ A session stops when another server erases its key, instead of showing an empty profile
-+ A player who joins twice in one server keeps their data when the older copy leaves
-+ Totals stay right while a deploy raises Shards
-+ A copy never goes back to an older state than this server already wrote
-+ Warnings show their full message instead of a table address
-+ Warnings no longer blame an erase or the datastore when another server simply wrote first
-+ A transaction the reaper is already cleaning up cannot be committed late
-+ What Peek with a MaxAge and Follow give you is frozen, like every other read
-+ A server keeps at most 256 copies of keys that nobody follows
-
-! 6.0 writes records in a new format that 5.x cannot read. Do not run the two side by side
-! Erase can answer Busy now. It means money on the key is still being sent. Try again later
-! What Peek with a MaxAge and Follow give you is frozen. Clone it before you change it
-```
-
-### Upgrading
-
-Stop every 5.x server before you start 6.0, the same way you would for any shutdown. A 5.x server
-cannot read a key that 6.0 has written, so a mixed deploy fails to load some players.
-
-Your data needs no migration. Each key moves to the new format by itself the next time it is written.
-
-Two small things to check in your own code:
-
-- If you change a value you got from `Peek` with a `MaxAge` or from `Follow`, clone it first.
-- If you call `Erase`, treat `Busy` as "not yet" and call it again later. A transfer that cannot be
-  delivered is given back after 8 days, and then the erase goes through.
-
-## 5.4.1
-
-```diff
-+ Fixed Ledger.Frozen refusing a state that holds a map or array of tables
-```
-
-### Upgrading
-
-Install the new version.
-
-## 5.4.0
-
-```diff
-+ A typed reducer can return a state whose nested tables are typed read only
-+ Ledger.Frozen types a state as read only at every level, in Luau and in TypeScript
-```
-
-### Upgrading
-
-Install the new version.
-
-## 5.3.0
-
-```diff
-+ Transaction terms escape commas, brackets, = and %, so two different sets of fields never read as the same
-+ Fixed a reaper bug that could half apply a transaction retried under its Id
-+ Fixed WaitForLoaded answering nil for a player who rejoined mid load
-- Removed redundant checks
-
-! A transaction retried on 5.3.0 after it ran on an older server answers Spent if a leg string holds a comma, a bracket, = or %. Read the keys before you run it again under a new Id
-```
+v7 does not read v5 or v6 data. Open v7 stores under new names, and copy each player's old data in on their first join, as in [Changing your data](/docs/learn/changing-data#data-from-before-ledger).

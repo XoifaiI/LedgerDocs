@@ -1,14 +1,4 @@
 {
-  "title": "Guides",
-  "pages": [
-    "sessions",
-    "entity-stores",
-    "transfers",
-    "reservations",
-    "transactions",
-    "migrations",
-    "recovery",
-    "testing",
-    "typescript"
-  ]
+  "title": "More guides",
+  "pages": ["auctions-and-markets", "support-tools"]
 }

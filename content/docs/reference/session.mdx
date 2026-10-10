@@ -1,174 +1,85 @@
 ---
 title: Session
-description: One player's data, live on this server.
+description: The object Store:Load gives you for one player.
 ---
 
-You get one from `Store:Get`, `Store:Expect` or `Store:WaitForLoaded`. Sessions only exist on player
-keyed stores.
-
-## Fields
-
-### LogSize
+Look up any call on a player's session.
 
 ```luau
-Session.LogSize: number
-```
+local Session = Store:Load(Player) -- yields until the data is in
+if Session == nil then
+	return -- OnLoadFailed ran, and the player is kicked
+end
 
-How many ops are in the stored log. Read only.
-
-### LogBytes
-
-```luau
-Session.LogBytes: number
-```
-
-Roughly how many bytes the stored ops plus the queued ones take. Read only.
-
-## Reading
-
-### Get
-
-```luau
-Session:Get() -> S
-```
-
-Live state. Every table in it is frozen, at every depth, so a mutation throws on the line that did it:
-
-```luau
-local State = Session:Get()
-State.Gold = 99                --> attempt to modify a readonly table
-State.Bag.Items[1] = "sword"   --> attempt to modify a readonly table
-```
-
-### Observe
-
-```luau
-Session:Observe() -> Observer<S>
-```
-
-Fires on every accepted change. That includes changes from another server that arrive when a
-transfer or transaction settles. Doesn't fire for a refused op.
-
-```luau
+Player:SetAttribute("Gold", Session:Get().Gold)
 Session:Observe():Subscribe(function(State)
-	UpdateHud(Player, State)
+	Player:SetAttribute("Gold", State.Gold)
 end)
 ```
 
-This is the session's own stream, not a copy, so `Session:Observe() == Session:Observe()`. Don't
-call `Destroy` on it. That removes every subscriber, Ledger's own included. See
-[Observer](/docs/reference/observer) for the chain methods and cleanup.
+A session holds one player's data in memory while they are in the server. You get one from `Store:Load`, `Store:Get`, `Store:Expect` or `Store:WaitForLoaded`. Player stores only. See [Players](/docs/learn/players).
 
-### DidApply
+Every session call throws on a session that was released. Calls that wait also throw inside an observer listener.
 
-```luau
-Session:DidApply(Id: string) -> boolean
-```
+| Call | What it does |
+| --- | --- |
+| `Get()` | The player's data now. No request. |
+| `Observe()` | An [observer](/docs/reference/observers) that emits the data each time it changes. It has no first value, so call `Get()` first. |
+| `ObserveFates()` | An observer of what became of each `Apply`. |
+| `Apply(Op)` | A change that answers at once and is saved soon. |
+| `Commit(Op, Options?)` | A change that is saved before it answers. |
+| `DidApply(Name, Options?)` | Did a named op take effect? |
+| `Flush()` | Saves queued `Apply`s now. |
+| `Refresh()` | Reads the key now, to pick up changes made elsewhere. |
+| `Release()` | Saves and ends the session. |
 
-Whether a [`Once`](/docs/concepts/once) name ever applied on this key. Reads live state, so it
-doesn't yield.
-
-<Callout type="warn">
-  Live state includes the ops that wait for the next save. After `Apply` queues an op with a
-  `Once` name, `DidApply` returns `true` before the op is saved. It tells you the name applied, not
-  that it is saved. To know it is saved, use `Commit`, or `Apply` and then `Flush`.
-</Callout>
-
-## Writing
-
-### Apply
+## Apply
 
 ```luau
-Session:Apply(Kind: string, Fields: { [any]: any }?) -> (boolean, Reason?)
+local Ok, Result = Session:Apply({ Kind = "AddGold", Amount = Amount })
 ```
 
-Instant and local. Runs the reducer, updates state, pushes to observers, and queues the op for the
-next save. Never touches the datastore.
+Apply judges the op on the session's data, queues it and answers at once. It is saved by the next save (every 30 s), a `Flush`, a `Commit`, a `Release`, or shutdown. A `true` is not a save: the op is judged again when saved and may be turned away.
 
-Use it for gameplay. See [Apply and Commit](/docs/concepts/apply-and-commit).
+| Answer | Means | Do |
+| --- | --- | --- |
+| `true, Applied` | Queued. `Applied` is a handle to watch. | Watch `ObserveFates` for ops that matter. |
+| `Refused` or `Full` | The reducer said no on the current data. Nothing queued. | Tell the player. |
+| `Backlog` | 4,096 ops or 1.5 MiB are waiting. | `Flush`, then apply again. |
+| `Busy` | Another server's unfinished trade work decides this op. | Try again later. |
+| `Behind` or `Closed` | A newer build owns the key, or the server is closing. | Stop. |
+| `Invalid` | The op cannot be stored. | Fix the op. |
 
-On a session from a [typed store](/docs/concepts/typed-ops) the `Kind` and the `Fields` are checked
-against the ops you named. `Commit` and `CommitOp` are checked the same way.
+Apply never answers `Unresolved`. It takes no options.
 
-### Commit
+## ObserveFates
 
 ```luau
-Session:Commit(Kind: string, Fields: { [any]: any }?) -> Future<boolean, Reason?>
+Session:ObserveFates():Subscribe(function(Fate)
+	if Fate.Fate.Kind == "Turned" then
+		warn("turned away:", Fate.Fate.Why)
+	end
+end)
 ```
 
-Writes everything queued, appends the op, waits for the datastore, folds the record again, then
-returns. `true` means the op is applied and saved.
+Each applied op gets one fate, once: `Took` (saved), `Turned` (refused at save; `Why` and `State` say why) or `Unknown` (we cannot tell). Subscribe before you apply.
 
-If the log is full, `Commit` compacts it once and tries again. It returns `Full` if the log is still
-full.
-
-When a transaction is parked on the key, `Commit` waits up to 65 seconds for it to settle. If it is
-still parked and could change whether the op applies, `Commit` returns `Unresolved`. With two or
-more transactions parked it always does, because it cannot check every way they can settle.
-
-The op is already written, so don't call `Commit` again: that writes a second op with a new id.
-Read the key once the transaction settles, or use `CommitOp` with your own `Id`, which is safe to
-retry.
-
-Use it for any change you cannot undo.
-
-### CommitOp
+## Commit
 
 ```luau
-Session:CommitOp(Op: Op) -> Future<boolean, Reason?>
+local Ok, Result = Session:Commit({ Kind = "AddGold", Amount = Amount })
 ```
 
-Same as `Commit` but you build the op. Needs a string `Id` and a string `Kind`. A `Once` field, if
-you give one, has to be a non empty string.
+Saves before it answers, and saves queued `Apply`s in the same write. `Options` is `{ Id?, IdAt? }`, as for `Edit`. On `true`, `Result` is the saved data. The answers are the same as `Store:Edit`, with `Info.State` on `Refused` and `Info.Outcome` on `Unresolved`. See [Store](/docs/reference/store).
 
-```luau
-Session:CommitOp({
-	Id = HttpService:GenerateGUID(false),
-	Kind = "ProductGrant",
-	ProductId = 123456,
-	Once = `receipt:{Receipt.PurchaseId}`,
-}):Wait()
-```
+## Flush, Refresh, Release
 
-`IdAt` is optional. It is the time you first sent an op whose `Id` you chose, in Unix seconds as
-`os.time()` returns it. Send the same value on every retry. A key keeps the ids of its last 2048
-compacted ops. If the key has dropped ids that were compacted after `IdAt`, it cannot tell whether
-your op applied. The commit then returns `Unresolved`, applies nothing and warns. An `IdAt` that is
-not a number returns `Invalid`. A time later than now counts as now.
+| Call | Answer |
+| --- | --- |
+| `Flush()` | `true` once the save was answered, or after about 30 s. `true` does not mean the ops were saved: read the fates. `false, Closed` or `false, Behind`. Nothing queued answers `true`. |
+| `Refresh()` | `true` once the read is in. `false` with `Unresolved`, `Behind`, `Unreadable` or `Closed`. With ops queued it works like `Flush`. The view never goes back to older data. |
+| `Release()` | Saves once, waits up to about 30 s, and ends the session. Answers `true` even if the last save failed. Fates say what was saved. |
 
-`Id`, `Kind` and `OnceAt` belong to Ledger. If you pass them in `Fields` to `Apply` or `Commit`,
-Ledger warns and overwrites them. `Apply` and `Commit` make a new id on every call, so Ledger warns
-and drops an `IdAt` passed to them.
+`Store:Unload(Player)` is the same as `Release`. Use `Flush` before a [`Ledger.Tx`](/docs/reference/ledger) on the player's key, and `Refresh` after it to show the result.
 
-## Saving
-
-### Flush
-
-```luau
-Session:Flush() -> Future<boolean, Reason?>
-```
-
-Writes queued ops without adding one. Autosave calls this. `false` comes with a
-[reason](/docs/concepts/reasons) and the ops stay queued for next time.
-
-### Compact
-
-```luau
-Session:Compact() -> Future<boolean, Reason?>
-```
-
-Folds the logged ops into a new snapshot and removes the compacted ops from the log. Autosave does
-this when the log gets long, so you rarely need it.
-
-### Release
-
-```luau
-Session:Release() -> Future<boolean, Reason?>
-```
-
-Marks the session closed and writes what is left. `Apply`, `Commit` and `CommitOp` then return
-[`Closed`](/docs/concepts/reasons). `Flush` still works, because it adds no op.
-
-Use `Store:Unload` instead. `Release` closes the session and tells the store nothing, so `IsLoaded`
-stays `true`, `Get` still returns the closed session, and the autosave timer keeps running.
-`Unload` closes the session and also removes it from the store.
+Next: [Quantity](/docs/reference/quantity)

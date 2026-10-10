@@ -1,0 +1,83 @@
+---
+title: Observers and futures
+description: Watching a key, and waiting for an answer that comes later.
+---
+
+Watch a key for changes, and wait for the result of an `Unresolved` write.
+
+```luau
+local Connection = Bank:Follow(Key)
+	:Changed() -- skip a value equal to the one before
+	:Subscribe(function(State)
+		if State == "Behind" then
+			warn("a newer build owns this key")
+		else
+			print("gold is now", State.Gold)
+		end
+	end)
+
+Connection:Disconnect()
+```
+
+An observer sends you values over time. `Session:Observe`, `Session:ObserveFates`, `Store:Follow` and `Store:Stale` each return one.
+
+A listener runs at once, in the thread that caused the value, and must not wait. An error in a listener is caught and printed as a warning.
+
+## Observer
+
+| Method | What it does |
+| --- | --- |
+| `Subscribe(Listener)` | Calls `Listener` for each value. Returns a `Connection`. |
+| `Map(Transform)` | A new observer of the transformed values. |
+| `Filter(Predicate)` | A new observer that only passes values the predicate accepts. |
+| `Changed(Equals?)` | A new observer that skips a value equal to the last one. Use it to drop a repeated `"Behind"`. |
+| `Use(Middleware)` | Map and filter in one step: call `Emit` to pass a value on. |
+| `Destroy()` | Ends the observer and disconnects its listeners. Destroying a derived observer ends only its own link. |
+
+```luau
+Bank:Follow(Key)
+	:Filter(function(State)
+		return State ~= "Behind"
+	end)
+	:Map(function(State)
+		return if State == "Behind" then 0 else State.Gold
+	end)
+	:Subscribe(function(Gold)
+		print("gold:", Gold)
+	end)
+```
+
+### Follow
+
+`Store:Follow(Key)` emits the data when it changes, and the text `"Behind"` while a newer build owns the key and has saved its copy. It does nothing until the first `Subscribe`, and the first subscriber gets the current data soon after. Failed reads and absent keys emit nothing. Following one key twice in a server shares the work. See [Reading data](/docs/learn/reading-data).
+
+## Connection
+
+| | |
+| --- | --- |
+| `Connected` | `true` until you disconnect. It stays `true` after a session ends; no more values come. |
+| `Disconnect()` | Stops the listener. |
+
+## Future
+
+`Info.Outcome` is a future. It is known once, when Ledger learns what happened to an `Unresolved` write.
+
+```luau
+local Ok, Why, Info = Bank:Edit(Key, { Kind = "AddGold", Amount = Amount })
+if Why == "Unresolved" and Info and Info.Outcome then
+	local Outcome = Info.Outcome
+	task.spawn(function() -- Wait yields
+		local Landed, Reason = Outcome:Wait(120)
+		print(Landed, Reason)
+	end)
+end
+```
+
+| Method | What it does |
+| --- | --- |
+| `Wait(Timeout?)` | Waits and returns `Landed, Reason?`. `Landed` is `true` if the op took effect, or `false` with the reason. Returns nothing if the timeout comes first; the answer may still come later. |
+| `Happened(Wait?)` | `true` once the answer is known. With `Wait` it waits until then. |
+
+`Reason` is a definite answer the server heard later, or `Unresolved` if this server stopped trying. It is never `Closed`. A future is lost if the server restarts. Sending the same name again is the only way across servers. See [Making a change happen once](/docs/learn/once-only).
+
+Next: [Types](/docs/reference/types)

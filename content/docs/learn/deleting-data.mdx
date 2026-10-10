@@ -1,0 +1,71 @@
+---
+title: Deleting data
+description: Delete a player's data when Roblox asks you to, or wipe it back to the start.
+---
+
+Sometimes Roblox sends you a "Right to Erasure" request: a player's account was deleted, and you have to delete their data. This page shows how, and how to wipe a player back to the start without deleting them.
+
+## Deleting a player's data
+
+Your store needs `Erasable = true`, as in [Your data](/docs/learn/your-data). Then:
+
+```luau
+-- Deletes a player's saved data. True once nothing is saved for them.
+local function ErasePlayer(UserId: number): (boolean, string?)
+	local Ok, Result = PlayerStore:Erase(UserId)
+	if Ok or Result == "Missing" then
+		return true, nil -- erased, or there was nothing to erase
+	end
+
+	return false, tostring(Result)
+end
+```
+
+`Erase` deletes everything saved for that player. `Missing` means nothing was saved for them, which is just as good.
+
+Run it from an admin command, or anywhere on the server that suits you. If it answers anything else, like `Busy` or `Unresolved`, run it again a bit later. Erasing twice is safe.
+
+## Other places their UserId lives
+
+`Erase` only deletes the player's own data. If you keep their UserId anywhere else, like in a guild's member list or a trade log, remove it from there too, with an op of your own on that store.
+
+## Checking it worked
+
+A server that was still saving the player's data when you erased it could write it back. Their account is usually already deleted, so this is rare, but it's worth checking a day later:
+
+```luau
+-- True if nothing is saved for this player.
+local function IsGone(UserId: number): boolean
+	local Data, Why = PlayerStore:Peek(UserId)
+	return Data == nil and Why == "Missing"
+end
+```
+
+If it's not gone, erase it again.
+
+Roblox also keeps old versions of every DataStore key for 30 days. Ledger doesn't delete those.
+
+## Wiping a player back to the start
+
+To reset a player without deleting them, for example a cheater's progress, use `Reset`:
+
+```luau
+local function WipePlayer(UserId: number): (boolean, string?)
+	local Ok, Result = PlayerStore:Reset(UserId)
+	if Ok then
+		return true, nil
+	end
+
+	return false, tostring(Result)
+end
+```
+
+`Reset` puts their data back to `Default` and keeps the key. It works on any store, `Erasable` or not. `Missing` means they have no saved data, so there's nothing to reset.
+
+If the player is in a game when you do this, kick them first, so they rejoin with the reset data.
+
+## Turning `Erasable` on later
+
+If your store went live with `Erasable = false`, you can turn it on in an update. Players saved before that can still be erased. Wait until no server is running the old version before you erase anyone: shut down all servers after you publish.
+
+Next: [Shutdown and testing](/docs/learn/shutdown-and-testing)

@@ -1,0 +1,273 @@
+---
+title: Auctions and markets
+description: Run auctions and a fixed-price market where gold and items never go missing halfway.
+---
+
+This guide builds two things on top of the Learn pages: an auction that holds the top bid's gold until it ends, and a market where players sell items at a fixed price. Both move gold and items between several players at once, so both use [trades](/docs/learn/trading), and both use [balances](/docs/learn/your-data#balances-let-ledger-handle-gold) for gold.
+
+The full code is three ModuleScripts in `ServerStorage`: `Stores`, `Auction` and `Market`.
+
+## The player store
+
+Gold is a balance. `Receive` is the op other players' gold arrives with:
+
+```luau
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	Name = "PlayerData",
+	Keys = "Player",
+	Default = { Gold = 0, Items = {} },
+	MustExist = false,
+	Erasable = true,
+	Balances = {
+		Gold = { Credit = { "AddGold", "Receive" }, Debit = "SpendGold" },
+	},
+	-- ... the reducer handles GiveItem, GetItem and Purchase
+})
+```
+
+`GiveItem` takes an item from the player (refused if they don't have it), `GetItem` gives one, and `Purchase` takes the price and gives the item together, for the market.
+
+## The auction store
+
+Each auction is one key, named by an id. Its reducer refuses any bid that isn't allowed:
+
+```luau
+local AuctionStore = Ledger.New<<AuctionData, AuctionOps>>({
+	Name = "Auctions",
+	Keys = "String",
+	Default = { Seller = 0, Item = "", EndsAt = 0, TopBidder = 0, TopBid = 0, IsDone = false },
+	MustExist = false,
+	Erasable = false,
+	Reducer = function(Data, Op)
+		if Op.Kind == "Create" then
+			if Data.Seller ~= 0 then
+				return nil -- this id is taken
+			end
+
+			return {
+				Seller = Op.Seller,
+				Item = Op.Item,
+				EndsAt = Op.EndsAt,
+				TopBidder = 0,
+				TopBid = Op.MinBid,
+				IsDone = false,
+			}
+		end
+
+		if Op.Kind == "Bid" then
+			if Data.Seller == 0 or Data.IsDone or Op.At >= Data.EndsAt then
+				return nil -- no such auction, or it's over
+			end
+
+			if Op.Bidder == Data.Seller or Op.Amount <= Data.TopBid then
+				return nil -- the seller can't bid, and a bid must beat the top one
+			end
+
+			if Op.PrevBidder ~= Data.TopBidder or Op.PrevBid ~= Data.TopBid then
+				return nil -- someone else bid since this bidder looked
+			end
+
+			local New = table.clone(Data)
+			New.TopBidder = Op.Bidder
+			New.TopBid = Op.Amount
+			return New
+		end
+
+		if Op.Kind == "Finish" then
+			if Data.Seller == 0 or Data.IsDone or Op.At < Data.EndsAt then
+				return nil -- no such auction, already finished, or not over yet
+			end
+
+			local New = table.clone(Data)
+			New.IsDone = true
+			return New
+		end
+
+		return nil
+	end,
+})
+```
+
+A `Bid` op carries the top bid the bidder saw (`PrevBidder` and `PrevBid`). If someone else bid in the meantime, they don't match, and the bid is refused. The bidder can look again and decide.
+
+`At` is the time the bid was sent. It's in the op, not read in the reducer, because a reducer must give the same answer every time.
+
+## Where the gold waits
+
+While an auction runs, the top bid's gold sits in an escrow store. It only holds a balance, so it needs no reducer:
+
+```luau
+local EscrowStore = Ledger.New<<EscrowData, EscrowOps>>({
+	Name = "AuctionEscrow",
+	Keys = "String",
+	Default = { Held = 0 },
+	MustExist = false,
+	Erasable = false,
+	Balances = {
+		Held = { Credit = "EscrowIn", Debit = "EscrowOut" },
+	},
+})
+```
+
+## Placing a bid
+
+```luau
+local function Bid(Bidder: Player, Id: string, Amount: number): (boolean, string?)
+	local Auction = AuctionStore:Peek(Id)
+	if not Auction then
+		return false, "Missing"
+	end
+
+	if Auction.TopBidder == Bidder.UserId then
+		return false, "AlreadyTop"
+	end
+
+	if Amount <= Auction.TopBid then
+		return false, "TooLow"
+	end
+
+	local Legs = {
+		PlayerStore:Leg(Bidder.UserId, { Kind = "SpendGold", Amount = Amount }),
+		AuctionStore:Leg(Id, {
+			Kind = "Bid",
+			Bidder = Bidder.UserId,
+			Amount = Amount,
+			PrevBidder = Auction.TopBidder,
+			PrevBid = Auction.TopBid,
+			At = os.time(),
+		}),
+	}
+
+	if Auction.TopBidder ~= 0 then
+		-- Give the outbid player their gold back, from the escrow.
+		table.insert(Legs, PlayerStore:Leg(Auction.TopBidder, { Kind = "Receive", Amount = Auction.TopBid }))
+		table.insert(Legs, EscrowStore:Leg(Id, { Kind = "EscrowIn", Amount = Amount - Auction.TopBid }))
+	else
+		table.insert(Legs, EscrowStore:Leg(Id, { Kind = "EscrowIn", Amount = Amount }))
+	end
+
+	Flush(Bidder)
+	local Ok, Why, Info = Ledger.Tx(Legs)
+	if Why == "Unresolved" and Info and Info.Outcome then
+		Ok, Why = Info.Outcome:Wait()
+	end
+	Refresh(Bidder)
+
+	return Ok, Why
+end
+```
+
+One trade does it all: the bidder pays, the auction records the bid, and the gold goes into escrow. If someone was outbid, the same trade gives them their gold back. Either all of it happens or none of it does.
+
+The checks at the top matter:
+
+- **`AlreadyTop`**: the top bidder raising their own bid would put two parts of the trade on the same player, and a trade can't do that. It throws.
+- **`TooLow`**: a bid at or below the top bid would put a negative amount into escrow, which also throws. The reducer would refuse it anyway, but the trade has to make sense first.
+
+| Answer | What it means |
+|---|---|
+| `true` | They're the top bidder. |
+| `Refused` | Not enough gold, someone bid first, or the auction is over. Show the auction again. |
+| `TooLow`, `AlreadyTop` | Caught before sending. |
+
+## Finishing an auction
+
+```luau
+local function Finish(Id: string): (boolean, string?)
+	local Auction = AuctionStore:Peek(Id)
+	if not Auction then
+		return false, "Missing"
+	end
+
+	if Auction.IsDone then
+		return true, nil
+	end
+
+	local Legs = {
+		AuctionStore:Leg(Id, { Kind = "Finish", At = os.time() }),
+	}
+
+	if Auction.TopBidder ~= 0 then
+		table.insert(Legs, EscrowStore:Leg(Id, { Kind = "EscrowOut", Amount = Auction.TopBid }))
+		table.insert(Legs, PlayerStore:Leg(Auction.Seller, { Kind = "Receive", Amount = Auction.TopBid }))
+		table.insert(Legs, PlayerStore:Leg(Auction.TopBidder, { Kind = "GetItem", Item = Auction.Item }))
+	else
+		-- Nobody bid: the seller gets the item back.
+		table.insert(Legs, PlayerStore:Leg(Auction.Seller, { Kind = "GetItem", Item = Auction.Item }))
+	end
+
+	local Ok, Why = Ledger.Tx(Legs)
+	if Ok then
+		return true, nil
+	end
+
+	-- Another server may have finished it first. Check.
+	local After = AuctionStore:Peek(Id)
+	if After and After.IsDone then
+		return true, nil
+	end
+
+	return false, Why
+end
+```
+
+The winner gets the item, the seller gets the gold from escrow, and the auction is marked done, all in one trade. If nobody bid, the seller gets their item back.
+
+Any server can call `Finish`, for example every server checking its list of auctions once a minute. The first one to finish it wins. The rest are refused, because the auction is already done, so `Finish` reads the auction again and reports success.
+
+## A fixed-price market
+
+A listing is a key too:
+
+```luau
+local ListingStore = Ledger.New<<ListingData, ListingOps>>({
+	Name = "Listings",
+	Keys = "String",
+	Default = { Seller = 0, Item = "", Price = 0, IsSold = false },
+	MustExist = false,
+	Erasable = false,
+	Reducer = function(Data, Op)
+		if Op.Kind == "List" then
+			if Data.Seller ~= 0 then
+				return nil -- this id is taken
+			end
+```
+
+Listing an item is a trade of the seller's `GiveItem` and the listing's `List`, like creating an auction. Buying is one trade of three parts:
+
+```luau
+local function Buy(Buyer: Player, Id: string): (boolean, string?)
+	local Listing = ListingStore:Peek(Id)
+	if not Listing then
+		return false, "Missing"
+	end
+
+	if Listing.Seller == Buyer.UserId then
+		return false, "OwnListing"
+	end
+
+	Flush(Buyer)
+	local Ok, Why, Info = Ledger.Tx({
+		PlayerStore:Leg(Buyer.UserId, { Kind = "Purchase", Item = Listing.Item, Price = Listing.Price }),
+		ListingStore:Leg(Id, { Kind = "Sell", Buyer = Buyer.UserId }),
+		PlayerStore:Leg(Listing.Seller, { Kind = "Receive", Amount = Listing.Price }),
+	})
+	if Why == "Unresolved" and Info and Info.Outcome then
+		Ok, Why = Info.Outcome:Wait()
+	end
+	Refresh(Buyer)
+
+	return Ok, Why
+end
+```
+
+The buyer pays and gets the item, the listing is marked sold, and the seller is paid. If two players buy at once, one gets it and the other is refused.
+
+## Rules for every trade here
+
+- **Never two parts on the same key of one store.** That's why the seller can't bid or buy their own listing: check it before you send.
+- **Flush before, Refresh after**, for any player loaded on this server, as in [Trading](/docs/learn/trading). Players in other servers see the change at their next save, or sooner with the message from [Shared data](/docs/learn/shared-data#gifts-to-players-in-other-servers).
+- **Every server needs every store.** Keep them all in `Stores`, so any server can finish any trade.
+- **Keep auction and listing keys apart.** One key per auction and per listing spreads the writes out. A single key holding every listing would run out of writes in a busy game.
+
+Next: [Support tools](/docs/guides/support-tools)

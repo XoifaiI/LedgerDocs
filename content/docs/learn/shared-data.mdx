@@ -1,0 +1,155 @@
+---
+title: Shared data
+description: Guild banks, clan data and other data that doesn't belong to one player.
+---
+
+So far every store has been keyed by player. Some data belongs to a group instead: a guild's bank, a clan's message, a server-wide shop. For those, use a store with `Keys = "String"` and pick your own keys, like a guild id.
+
+## A guild store
+
+```luau
+export type GuildData = {
+	Gold: number,
+	Message: string,
+}
+
+type GuildOps = {
+	Deposit: { Amount: number },
+	Withdraw: { Amount: number },
+	SetMessage: { Message: string },
+}
+
+local GuildStore = Ledger.New<<GuildData, GuildOps>>({
+	Name = "Guilds",
+	Keys = "String",
+	Default = { Gold = 0, Message = "" },
+	MustExist = false,
+	Erasable = true,
+	Reducer = function(Data, Op)
+		if Op.Kind == "Deposit" then
+			local New = table.clone(Data)
+			New.Gold += Op.Amount
+			return New
+		end
+
+		if Op.Kind == "Withdraw" then
+			if Data.Gold < Op.Amount then
+				return nil -- not enough in the bank
+			end
+
+			local New = table.clone(Data)
+			New.Gold -= Op.Amount
+			return New
+		end
+
+		if Op.Kind == "SetMessage" then
+			local New = table.clone(Data)
+			New.Message = Op.Message
+			return New
+		end
+
+		return nil
+	end,
+})
+```
+
+It works like the player store, with two differences:
+
+- Keys are strings you choose, up to 50 characters. Here it's the guild's id.
+- There are no sessions. Nobody "loads" a guild. You change it with `Edit`, from any server.
+
+## Changing it with `Edit`
+
+```luau
+local function SetMessage(GuildId: string, Message: string): boolean
+	local Ok = GuildStore:Edit(GuildId, { Kind = "SetMessage", Message = Message })
+	return Ok
+end
+```
+
+`Edit` runs your reducer on the guild's saved data and saves the result before it answers, like `Commit`. Any server can do this at the same time as any other, and no change is ever lost: each one is applied on top of the last.
+
+`Edit` gives the same answers as every other call. See [Answers](/docs/learn/answers).
+
+## Moving gold into the bank
+
+Moving gold from a player into the guild is a [trade](/docs/learn/trading) between the player and the guild, so both sides happen or neither does:
+
+```luau
+local function Deposit(Player: Player, GuildId: string, Amount: number): boolean
+	local Session = PlayerStore:Get(Player)
+	if Session then
+		Session:Flush()
+	end
+
+	local Ok = Ledger.Tx({
+		PlayerStore:Leg(Player.UserId, { Kind = "SpendGold", Amount = Amount }),
+		GuildStore:Leg(GuildId, { Kind = "Deposit", Amount = Amount }),
+	})
+
+	local SessionAfter = PlayerStore:Get(Player)
+	if SessionAfter then
+		SessionAfter:Refresh()
+	end
+
+	return Ok
+end
+```
+
+Withdrawing is the same with the ops swapped: `Withdraw` from the guild and `AddGold` to the player.
+
+## Keep shared data small
+
+Many servers can write to the same guild, but one key can only take so many writes a minute, and bigger data means fewer. As a rough guide, a key holding 1 MB takes about 4 changes a minute, and a key holding 10 KB takes hundreds.
+
+So keep shared data small, and split it up if it grows. Give each guild its own key, rather than one giant key for every guild. For a number every server bumps all the time, like total kills across the game, use [Global counters](/docs/learn/global-counters) instead.
+
+## Gifts to players in other servers
+
+`Edit` also works on a player store, by UserId. The player can be in this server, in another server, or offline:
+
+```luau
+local REFRESH_TOPIC = "RefreshPlayer"
+
+-- Sends gold to any player, wherever they are.
+local function SendGift(UserId: number, Amount: number): boolean
+	local Ok = PlayerStore:Edit(UserId, { Kind = "AddGold", Amount = Amount })
+	if not Ok then
+		return false
+	end
+
+	-- Tell the server they're in to show it now. If this fails, they still see it within about 2 minutes.
+	pcall(MessagingService.PublishAsync, MessagingService, REFRESH_TOPIC, UserId)
+	return true
+end
+```
+
+If the player is in this server, they see the gold straight away. If they're offline, they see it next time they join.
+
+If they're in another server, that server finds out on its own within about 2 minutes. The `PublishAsync` line makes it sooner: it tells every server to refresh that player, and the server they're in does. Put this in a Script so every server listens:
+
+```luau
+local function OnRefreshMessage(Message: { Data: unknown })
+	if type(Message.Data) ~= "number" then
+		return
+	end
+
+	local Player = Players:GetPlayerByUserId(Message.Data)
+	if not Player then
+		return -- not in this server
+	end
+
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return
+	end
+
+	Session:Refresh()
+end
+
+pcall(MessagingService.SubscribeAsync, MessagingService, Gifts.REFRESH_TOPIC, OnRefreshMessage)
+```
+
+The message is only a nudge. If it's lost, nothing breaks: the gold is already saved, and the player sees it a little later.
+
+Next: [Reading data](/docs/learn/reading-data)

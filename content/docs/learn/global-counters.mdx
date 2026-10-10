@@ -1,0 +1,116 @@
+---
+title: Global counters
+description: Count something across every server, like total boss kills or gold spent, and show the total.
+---
+
+Say you want a sign in the lobby that shows how many times the boss has been killed, across every server. Every server adds to the number all the time. If they all wrote to one key, that key would run out of writes fast. A counter spreads the adds out and adds them up for you.
+
+Counters are for stats you show. They're not for gold or anything a player owns: that belongs in the player's data.
+
+## 1. Declare the counters
+
+Counters live in a store of their own. Add it to `Stores`:
+
+```luau
+local StatsStore = Ledger.New({
+	Name = "GlobalStats",
+	Keys = "String",
+	Default = {},
+	MustExist = false,
+	Erasable = false,
+	Totals = {
+		GoldSpent = {},
+		BossKills = {},
+	},
+})
+```
+
+This store only holds counters, so it has no data or reducer of its own. Each name in `Totals` is one counter, and starts at 0.
+
+## 2. Add to a counter
+
+Put this in a ModuleScript called `GlobalStats` in `ServerStorage`:
+
+```luau
+--!strict
+local ServerStorage = game:GetService("ServerStorage")
+
+local Stores = require(ServerStorage.Stores)
+
+local StatsStore = Stores.StatsStore
+
+-- Adds to a counter in the background. Call it only once the thing you count has saved.
+local function Add(Name: string, Amount: number)
+	task.spawn(function()
+		local Ok, Why = StatsStore:Bump(Name, Amount)
+		if not Ok and Why ~= "Unresolved" then
+			warn("Couldn't count", Name, Why)
+		end
+	end)
+end
+
+-- The counter's total, or nil if it can't be read right now.
+local function Read(Name: string): number?
+	local Total = StatsStore:Total(Name, 60)
+	return Total
+end
+
+return {
+	Add = Add,
+	Read = Read,
+}
+```
+
+`Bump` adds to the counter. It waits for the next batch, which can take up to a minute, because each server saves its adds together instead of one by one. That's why `Add` runs it in `task.spawn`: never make a player wait for it.
+
+Add only once the thing you're counting has actually saved:
+
+```luau
+local Ok = Session:Commit({ Kind = "SpendGold", Amount = 25 })
+if Ok then
+	GlobalStats.Add("GoldSpent", 25)
+end
+```
+
+A counter is separate from the player's data. If you add first and the purchase then fails, the counter still went up.
+
+`Amount` is a whole number, and it can be negative to take some away.
+
+## What `Bump` answers
+
+| Answer | What it means |
+|---|---|
+| `true` | Counted. |
+| `Unresolved` | Ledger is still sending it. Don't send it again, or it counts twice. |
+| `Busy` | Too many adds at once. This one wasn't counted. |
+| `Closed` | The server is shutting down. Not counted. |
+
+For a stat on a sign, missing the odd add is fine, so `Add` just warns. [Answers](/docs/learn/answers) has the rest.
+
+## 3. Show the total
+
+```luau
+--!strict
+local ServerStorage = game:GetService("ServerStorage")
+
+local GlobalStats = require(ServerStorage.GlobalStats)
+
+local REFRESH_SECONDS = 60
+
+while true do
+	local Kills = GlobalStats.Read("BossKills")
+	if Kills then
+		workspace:SetAttribute("BossKills", Kills)
+	end
+
+	task.wait(REFRESH_SECONDS)
+end
+```
+
+`Total(Name, 60)` answers the counter. It reuses an answer up to 60 seconds old, and otherwise reads a copy that all your servers share, so it usually costs no DataStore requests. Read it about once a minute, not every frame. A new add can take a few minutes to show up in the total.
+
+## Changing counters later
+
+You can add new counters to `Totals` at any time. Don't rename one: a new name is a new counter that starts at 0.
+
+Next: [Changing data](/docs/learn/changing-data)

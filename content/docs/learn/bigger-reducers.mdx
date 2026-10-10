@@ -1,0 +1,346 @@
+---
+title: Bigger reducers
+description: Keeping a reducer short and typed as your game grows past a few ops.
+---
+
+The reducer on the last page had three ops. A real game has dozens, and data a few tables deep. This page shows how to keep that tidy, without a wall of `table.clone`s.
+
+We'll build a small pet system: hatch a pet, feed it to level it up, equip it, and sell it.
+
+## The data and ops
+
+```luau
+export type Pet = {
+	Species: string,
+	Level: number,
+	Xp: number,
+	Equipped: boolean,
+}
+
+export type PlayerData = {
+	Coins: number,
+	Pets: { [string]: Pet },
+	PetCount: number,
+	EquippedCount: number,
+}
+
+export type PlayerOps = {
+	Hatch: { PetId: string, Species: string },
+	Feed: { PetId: string, Xp: number },
+	Equip: { PetId: string },
+	Sell: { PetId: string },
+}
+
+type Op<Kind> = Ledger.OpOf<PlayerOps, Kind>
+```
+
+`Op<"Feed">` is the type of one kind of op: here `{ Kind: "Feed", PetId: string, Xp: number }`. `Ledger.OpOf` builds it from your `PlayerOps` so you never write it twice.
+
+## One function per op
+
+Give each op its own function, then list them in a table by kind:
+
+```luau
+-- Every op function, by kind.
+local HANDLERS: { [string]: (Data: PlayerData, Op: any) -> PlayerData? } = {
+	Hatch = Hatch,
+	Feed = Feed,
+	Equip = Equip,
+	Sell = Sell,
+}
+```
+
+The reducer looks up the op's kind and hands it to the right function:
+
+```luau
+	Reducer = function(Data, Op)
+		local Handler = HANDLERS[Op.Kind]
+		if not Handler then
+			return nil -- a kind this server doesn't know
+		end
+
+		return Handler(Data, Op)
+	end,
+```
+
+To add an op, put it in `PlayerOps` as before, write its function, and add one line to `HANDLERS`. The reducer never changes.
+
+Each function is typed with `Op<...>`, so it only accepts its own kind of op. Misspell a field, like `Op.XP` instead of `Op.Xp`, and Studio underlines it right away. If you write a function and forget to add it to `HANDLERS`, Studio warns you that it's never used.
+
+## Copy only what you change
+
+`table.clone` copies one level. You only need to copy the tables on the way to what you're changing. Everything else stays shared with the old data, and that's fine.
+
+Changing a pet means three copies: the pet, the `Pets` table, and the data at the top. A small helper takes care of the middle one:
+
+```luau
+-- Copies a table, then sets one entry in the copy. Pass nil to remove it.
+local function SetEntry<Value>(Map: { [string]: Value }, Key: string, NewValue: Value?): { [string]: Value }
+	local Copy = table.clone(Map)
+	Copy[Key] = NewValue
+	return Copy
+end
+```
+
+With it, feeding a pet reads top to bottom:
+
+```luau
+local function Feed(Data: PlayerData, Op: Op<"Feed">): PlayerData?
+	local Pet = Data.Pets[Op.PetId]
+	if not Pet then
+		return nil
+	end
+
+	local TotalXp = Pet.Xp + Op.Xp
+
+	local NewPet = table.clone(Pet)
+	NewPet.Level += TotalXp // XP_PER_LEVEL
+	NewPet.Xp = TotalXp % XP_PER_LEVEL
+
+	local New = table.clone(Data)
+	New.Pets = SetEntry(Data.Pets, Op.PetId, NewPet)
+	return New
+end
+```
+
+Adding a pet and removing one use the same helper. `Sell` passes `nil` to remove the pet:
+
+```luau
+local function Sell(Data: PlayerData, Op: Op<"Sell">): PlayerData?
+	local Pet = Data.Pets[Op.PetId]
+	if not Pet then
+		return nil
+	end
+
+	if Pet.Equipped then
+		return nil -- unequip it first
+	end
+
+	local New = table.clone(Data)
+	New.Coins += Pet.Level * SELL_PRICE_PER_LEVEL
+	New.PetCount -= 1
+	New.Pets = SetEntry(Data.Pets, Op.PetId, nil)
+	return New
+end
+```
+
+If you keep a list instead of a table of ids, remove items with `table.remove` on the copy. Setting an index to `nil` leaves a hole, and a list with a hole can't be saved.
+
+## Keep counts in your data
+
+The reducer runs a lot, so keep it quick. Instead of counting `Pets` every time a pet hatches, keep `PetCount` in the data and change it with every hatch and sell:
+
+```luau
+local function Hatch(Data: PlayerData, Op: Op<"Hatch">): PlayerData?
+	if Data.Coins < HATCH_COST then
+		return nil
+	end
+
+	if Data.PetCount >= MAX_PETS then
+		return nil
+	end
+
+	if Data.Pets[Op.PetId] then
+		return nil -- this id is already used
+	end
+
+	local NewPet: Pet = { Species = Op.Species, Level = 1, Xp = 0, Equipped = false }
+
+	local New = table.clone(Data)
+	New.Coins -= HATCH_COST
+	New.PetCount += 1
+	New.Pets = SetEntry(Data.Pets, Op.PetId, NewPet)
+	return New
+end
+```
+
+Hatching the 200th pet now costs the same as the first.
+
+## Telling the player why
+
+When the reducer returns `nil`, the call just gets back `false`. It doesn't say which check failed. If you want to tell the player, check before you send the op:
+
+```luau
+local function OnHatch(Player: Player)
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return -- still loading
+	end
+
+	local Data = Session:Get()
+	if Data.Coins < Stores.HATCH_COST then
+		print(Player.Name, "needs", Stores.HATCH_COST, "coins to hatch")
+		return
+	end
+
+	if Data.PetCount >= Stores.MAX_PETS then
+		print(Player.Name, "has no room for another pet")
+		return
+	end
+
+	local Species = SPECIES[math.random(#SPECIES)]
+	local PetId = HttpService:GenerateGUID(false)
+
+	Session:Apply({ Kind = "Hatch", PetId = PetId, Species = Species })
+end
+```
+
+The reducer still checks the same things. The check in your script is for the message, and the check in the reducer is the rule.
+
+The species is rolled and the pet id made here, in the script, because a reducer can't use `math.random`. The op carries what was rolled.
+
+## The whole store
+
+```luau
+--!strict
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Ledger = require(ReplicatedStorage.Ledger)
+
+export type Pet = {
+	Species: string,
+	Level: number,
+	Xp: number,
+	Equipped: boolean,
+}
+
+export type PlayerData = {
+	Coins: number,
+	Pets: { [string]: Pet },
+	PetCount: number,
+	EquippedCount: number,
+}
+
+export type PlayerOps = {
+	Hatch: { PetId: string, Species: string },
+	Feed: { PetId: string, Xp: number },
+	Equip: { PetId: string },
+	Sell: { PetId: string },
+}
+
+type Op<Kind> = Ledger.OpOf<PlayerOps, Kind>
+
+local HATCH_COST = 250
+local MAX_PETS = 200
+local MAX_EQUIPPED = 3
+local XP_PER_LEVEL = 100
+local SELL_PRICE_PER_LEVEL = 50
+
+-- Copies a table, then sets one entry in the copy. Pass nil to remove it.
+local function SetEntry<Value>(Map: { [string]: Value }, Key: string, NewValue: Value?): { [string]: Value }
+	local Copy = table.clone(Map)
+	Copy[Key] = NewValue
+	return Copy
+end
+
+local function Hatch(Data: PlayerData, Op: Op<"Hatch">): PlayerData?
+	if Data.Coins < HATCH_COST then
+		return nil
+	end
+
+	if Data.PetCount >= MAX_PETS then
+		return nil
+	end
+
+	if Data.Pets[Op.PetId] then
+		return nil -- this id is already used
+	end
+
+	local NewPet: Pet = { Species = Op.Species, Level = 1, Xp = 0, Equipped = false }
+
+	local New = table.clone(Data)
+	New.Coins -= HATCH_COST
+	New.PetCount += 1
+	New.Pets = SetEntry(Data.Pets, Op.PetId, NewPet)
+	return New
+end
+
+local function Feed(Data: PlayerData, Op: Op<"Feed">): PlayerData?
+	local Pet = Data.Pets[Op.PetId]
+	if not Pet then
+		return nil
+	end
+
+	local TotalXp = Pet.Xp + Op.Xp
+
+	local NewPet = table.clone(Pet)
+	NewPet.Level += TotalXp // XP_PER_LEVEL
+	NewPet.Xp = TotalXp % XP_PER_LEVEL
+
+	local New = table.clone(Data)
+	New.Pets = SetEntry(Data.Pets, Op.PetId, NewPet)
+	return New
+end
+
+local function Equip(Data: PlayerData, Op: Op<"Equip">): PlayerData?
+	local Pet = Data.Pets[Op.PetId]
+	if not Pet then
+		return nil
+	end
+
+	if Pet.Equipped then
+		return nil
+	end
+
+	if Data.EquippedCount >= MAX_EQUIPPED then
+		return nil
+	end
+
+	local NewPet = table.clone(Pet)
+	NewPet.Equipped = true
+
+	local New = table.clone(Data)
+	New.EquippedCount += 1
+	New.Pets = SetEntry(Data.Pets, Op.PetId, NewPet)
+	return New
+end
+
+local function Sell(Data: PlayerData, Op: Op<"Sell">): PlayerData?
+	local Pet = Data.Pets[Op.PetId]
+	if not Pet then
+		return nil
+	end
+
+	if Pet.Equipped then
+		return nil -- unequip it first
+	end
+
+	local New = table.clone(Data)
+	New.Coins += Pet.Level * SELL_PRICE_PER_LEVEL
+	New.PetCount -= 1
+	New.Pets = SetEntry(Data.Pets, Op.PetId, nil)
+	return New
+end
+
+-- Every op function, by kind.
+local HANDLERS: { [string]: (Data: PlayerData, Op: any) -> PlayerData? } = {
+	Hatch = Hatch,
+	Feed = Feed,
+	Equip = Equip,
+	Sell = Sell,
+}
+
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	Name = "PlayerData",
+	Keys = "Player",
+	Default = { Coins = 0, Pets = {}, PetCount = 0, EquippedCount = 0 },
+	MustExist = false,
+	Erasable = true,
+	Reducer = function(Data, Op)
+		local Handler = HANDLERS[Op.Kind]
+		if not Handler then
+			return nil -- a kind this server doesn't know
+		end
+
+		return Handler(Data, Op)
+	end,
+})
+
+return {
+	PlayerStore = PlayerStore,
+	HATCH_COST = HATCH_COST,
+	MAX_PETS = MAX_PETS,
+}
+```
+
+Next: [Players](/docs/learn/players)

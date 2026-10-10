@@ -1,0 +1,149 @@
+---
+title: Support tools
+description: Look at a player's saved data, fix it for a support ticket, and find players across a whole store.
+---
+
+When a player messages you that something's wrong with their data, these calls help you see what happened and fix it. They're for you and your support team, from an admin command or a script, not for gameplay.
+
+The code on this page is one ModuleScript, `SupportTools`, in `ServerStorage`.
+
+## Looking at a player's data
+
+```luau
+-- Prints what's saved for a player, and anything unfinished on their data.
+local function Lookup(UserId: number)
+	local Record, Why = PlayerStore:Inspect(UserId)
+	if not Record then
+		print("Nothing to show:", Why)
+		return
+	end
+
+	print("Gold:", Record.State.Gold)
+
+	local Items = PlayerStore:Pending(UserId)
+	if not Items then
+		return
+	end
+
+	for _, Item in Items do
+		print("Unfinished:", Item.Kind, `{Item.Age} seconds old`)
+	end
+end
+```
+
+`Inspect` gives you the player's saved data, like `Peek`, and answers the same way when it can't: `Missing`, `Unresolved` and so on.
+
+`Pending` lists anything unfinished on their data, usually a [trade](/docs/learn/trading) still in progress. Each item has a `Kind` and an `Age` in seconds:
+
+| Item | What it means |
+|---|---|
+| `Escrow` or `Exclusive`, a few seconds old | A trade is happening right now. Wait. |
+| `Escrow` or `Exclusive`, older | The server that started the trade probably crashed. See below. |
+| `Pinned` | A finished trade's record. Normal for up to about 30 minutes, and clears itself. |
+
+## Finishing stuck trades
+
+Ledger finishes a trade whose server crashed on its own, the next time the player's data is touched, within about 30 minutes. To do it now:
+
+```luau
+-- Finishes anything left unfinished on a player's data.
+local function Unstick(UserId: number): boolean
+	local Ok, Why = PlayerStore:Resettle(UserId)
+	if not Ok then
+		warn("Couldn't finish everything yet:", Why)
+	end
+
+	return Ok
+end
+```
+
+`true` means nothing unfinished is left. `Unresolved` means something couldn't be finished yet, so try again later.
+
+## What a reset or erase wiped
+
+`Reset` and `Erase` keep a note of the [balances](/docs/learn/your-data#balances-let-ledger-handle-gold) they wiped, for 7 days:
+
+```luau
+-- Prints the gold a Reset or Erase wiped from a player in the last 7 days.
+local function ShowLosses(UserId: number)
+	local Losses = PlayerStore:Losses(UserId)
+	if not Losses then
+		return
+	end
+
+	for _, Event in Losses.Events do
+		for _, Lost in Event.Fields do
+			print(Event.Cause, "wiped", Lost.Field)
+		end
+	end
+end
+```
+
+## Fixing a player's data
+
+Make the fix an op like any other, and give each support ticket an id. The reducer remembers the last 100 tickets and refuses one it has seen, so a fix can't apply twice, even if you send it twice by accident:
+
+```luau
+-- in the reducer:
+if Op.Kind == "FixGold" then
+	if table.find(Data.Tickets, Op.Ticket) then
+		return nil -- this ticket was already applied
+	end
+
+	local New = table.clone(Data)
+	New.Gold = Op.Gold
+	New.Tickets = table.clone(Data.Tickets)
+	table.insert(New.Tickets, Op.Ticket)
+	if #New.Tickets > TICKETS_KEPT then
+		table.remove(New.Tickets, 1)
+	end
+	return New
+end
+```
+
+```luau
+-- Sets a player's gold for a support ticket. A ticket only ever applies once.
+local function FixGold(UserId: number, Ticket: string, Gold: number): (boolean, string?)
+	local Ok, Why = PlayerStore:Edit(UserId, { Kind = "FixGold", Ticket = Ticket, Gold = Gold })
+	return Ok, Why
+end
+```
+
+`Refused` means this ticket was already applied. Check the player's data with `Inspect` before and after.
+
+## Going through every player
+
+```luau
+-- Goes through every player in the store and gives the ones with more gold than Limit.
+local function FindRich(Limit: number): { number }
+	local Found: { number } = {}
+	local Pages = PlayerStore:Keys()
+
+	while true do
+		local Page = Pages:Next()
+		if not Page then
+			return Found
+		end
+
+		for _, Key in Page do
+			local UserId = tonumber(Key)
+			if not UserId then
+				continue
+			end
+
+			local Data = PlayerStore:Peek(UserId)
+			if Data and Data.Gold > Limit then
+				table.insert(Found, UserId)
+			end
+
+			task.wait(SECONDS_BETWEEN_READS)
+		end
+	end
+end
+```
+
+`Keys` lists every key in the store, a page at a time. `Next` gives a page, then `nil` after the last one. Keys come in no set order, and one made while you're going through might be missed.
+
+This reads every player's data once. Each server only gets about 60 DataStore reads a minute, plus 40 per player in it, and your game needs those too. One read a second leaves plenty to spare, but it takes a while on a big game: about a day per 80,000 players. Run it on one server, not every server.
+
+Next: [Ledger reference](/docs/reference/ledger)

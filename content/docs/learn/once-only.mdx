@@ -1,0 +1,137 @@
+---
+title: Once only
+description: Daily rewards, codes and quest rewards that can never be given twice.
+---
+
+Ledger never applies one call twice, even when it has to send it again after a DataStore hiccup. For most changes, that's all you need.
+
+This page is for rules like "once per day" or "once per code". Those are about your game, not about one call: a player can spam the button, or claim from two servers at once. The safe way to handle them is to keep a record in the player's data.
+
+## Keep a record in the data
+
+Here's a daily reward and a code system. `LastDailyDay` remembers the day the reward was last claimed, and `RedeemedCodes` remembers every code the player has used:
+
+```luau
+export type PlayerData = {
+	Gold: number,
+	LastDailyDay: number,
+	RedeemedCodes: { [string]: boolean },
+}
+```
+
+The reducer checks the record before giving anything, and updates it in the same change:
+
+```luau
+	Reducer = function(Data, Op)
+		if Op.Kind == "ClaimDaily" then
+			if Data.LastDailyDay == Op.Day then
+				return nil -- already claimed today
+			end
+
+			local New = table.clone(Data)
+			New.Gold += Op.Amount
+			New.LastDailyDay = Op.Day
+			return New
+		end
+
+		if Op.Kind == "RedeemCode" then
+			if Data.RedeemedCodes[Op.Code] then
+				return nil -- already redeemed
+			end
+
+			local RedeemedCodes = table.clone(Data.RedeemedCodes)
+			RedeemedCodes[Op.Code] = true
+
+			local New = table.clone(Data)
+			New.Gold += Op.Amount
+			New.RedeemedCodes = RedeemedCodes
+			return New
+		end
+
+		return nil
+	end,
+```
+
+Because the check and the reward happen in one change, there's no gap where a second claim can slip in. However many times the op is sent, from however many servers, only the first one gets through. The rest are refused.
+
+## Sending it
+
+Your script works out the day and sends the op. The reducer can't use the clock, so the day goes in the op:
+
+```luau
+local SECONDS_PER_DAY = 86400
+local DAILY_GOLD = 100
+
+local CODES: { [string]: number } = {
+	RELEASE = 500,
+	THANKYOU = 250,
+}
+
+local function OnClaimDaily(Player: Player)
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return
+	end
+
+	local Today = os.time() // SECONDS_PER_DAY
+
+	local Ok = Session:Apply({ Kind = "ClaimDaily", Day = Today, Amount = DAILY_GOLD })
+	if not Ok then
+		print(Player.Name, "already claimed today")
+		return
+	end
+
+	print(Player.Name, "claimed their daily reward")
+end
+
+local function OnRedeemCode(Player: Player, Code: unknown)
+	if type(Code) ~= "string" then
+		return
+	end
+
+	local Amount = CODES[Code]
+	if not Amount then
+		return -- not a real code
+	end
+
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return
+	end
+
+	local Ok = Session:Apply({ Kind = "RedeemCode", Code = Code, Amount = Amount })
+	if not Ok then
+		print(Player.Name, "already used", Code)
+		return
+	end
+
+	print(Player.Name, "redeemed", Code)
+end
+```
+
+The codes and amounts live on the server, so a player can't make up their own.
+
+## Why this is safe
+
+With a record in the data, sending the same op twice is harmless. That matters when something goes wrong:
+
+- If the player clicks twice, the second click is refused.
+- If a save is lost in a long DataStore outage, the player can just claim again, and they'll get it exactly once.
+
+This is the same pattern [Purchases](/docs/learn/purchases) uses for Robux, where Roblox does the asking again for you.
+
+Records grow, so keep them small. One number for the last day is enough for a daily reward. For codes, a table of the codes used is fine, since there are only ever a few.
+
+## Names
+
+Ledger quietly names every change it sends, which is how it never applies one twice. You can pass your own name with an `Id` option, but you don't need to anywhere in these docs.
+
+Three answers are about names. You'll mostly see them when you pass your own:
+
+| Reason | What it means |
+|---|---|
+| `Spent` | That name was already used for a different change, or a [trade](/docs/learn/trading) stopped without going through. This call changed nothing. |
+| `Expired` | Ledger has forgotten the name. Names are kept for a few minutes. Nothing was sent. |
+| `NoRoom` | Too many names on this data at once. Nothing was sent. Try again in a moment. |
+
+Next: [Purchases](/docs/learn/purchases)

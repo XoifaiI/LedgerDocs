@@ -1,552 +1,159 @@
 ---
 title: Store
-description: Everything on the object Ledger.New returns.
+description: Every call on the object Ledger.New returns.
 ---
 
-A store owns one datastore name, every key under it, and every session live on this server.
-
-A method marked "Player only" throws when you call it on a string keyed store.
-
-## Sessions
-
-### Load
+Look up any call on a store.
 
 ```luau
-Store:Load(Player: Player) -> ()
+local Ok, Why, Info = Bank:Edit(Key, { Kind = "AddGold", Amount = Amount })
+if not Ok then
+	warn("add failed:", Why)
+end
+
+local State, Why = Bank:Peek(Key, 30) -- up to 30 s old is fine
 ```
 
-Player only. Yields while it reads and folds the record, then starts a 30 second autosave. Kicks the
-player if the load fails.
+A store holds one name and every key under it. A key is a string, or a `Player` or UserId in a player store. Most calls work on any store. The player calls (`Load` and friends) work on player stores only, and throw on a string store.
 
-Calling it twice for the same player warns and does nothing. If the player leaves during the load,
-Ledger releases the session and does not keep it.
+A bad call throws before anything is sent: an unknown op kind, a bad key, a wrong option name, or a call made from inside a reducer. Answers are never thrown. See [Answers](/docs/learn/answers).
 
-### Unload
+## Changing data
 
-```luau
-Store:Unload(Player: Player) -> ()
-```
-
-Player only. Cancels the autosave, writes queued ops, and yields until they are saved.
-
-### Get
-
-```luau
-Store:Get(Player: Player) -> Session<D>?
-```
-
-Player only. The session, or `nil` if they aren't loaded.
-
-### Expect
-
-```luau
-Store:Expect(Player: Player) -> Session<D>
-```
-
-Player only. The session, or throws. For code that already knows they're loaded.
-
-### IsLoaded
-
-```luau
-Store:IsLoaded(Player: Player) -> boolean
-```
-
-Player only.
-
-### WaitForLoaded
-
-```luau
-Store:WaitForLoaded(Player: Player) -> Session<D>?
-```
-
-Player only. Yields until the session exists. Returns `nil` if the player left first. Use it in
-`ProcessReceipt`.
-
-### Read
-
-```luau
-Store:Read(Player: Player) -> D?
-```
-
-Player only. The state table, or `nil` if the player is not loaded. Same as
-`Store:Get(Player):Get()`.
-
-## Reading any key
-
-### Peek
-
-```luau
-Store:Peek(Key: KeyLike, MaxAge: number?) -> Future<D?, Reason?>
-```
-
-Reads the record and folds it. It works for any key, whether the player is on this server, on
-another server, or offline. Without `MaxAge` there is no cache. Each call costs one request.
-
-With `MaxAge`, `Peek` returns a copy of the key instead. There are two copies:
-
-- This server's own copy. While it is younger than `MaxAge` seconds, `Peek` returns it and makes no
-  request.
-- A copy in MemoryStore that every server reads. When this server's copy is older than `MaxAge`,
-  `Peek` reads the shared copy for one request unit.
-
-The shared copy goes stale after 60 to 75 seconds. Each server picks its own limit in that range.
-One server then reads the record and writes the shared copy again. The other servers return the old
-copy until it has.
-
-A `MaxAge` of 0 reads the record now. If many servers ask at the same time, only one of them reads
-the record. The copy holds your fields only. Ledger's own fields, such as `_Received` and `_Held`,
-are not on it. `Peek` with a `MaxAge` works on string keyed stores only. See
-[Following a key](/docs/guides/entity-stores#following-a-key).
-
-A key nobody has written folds to your `Default`. `nil` always means the read failed, and the reason
-tells you why. `Behind` means a newer build wrote the key. On any other reason, try again.
-
-### DidApply
-
-```luau
-Store:DidApply(Key: KeyLike, Id: string) -> Future<boolean?, Reason?>
-```
-
-Whether a [`Once`](/docs/concepts/once) name ever applied on that key.
-
-`nil` means it could not read the record, which is not the same as `false`. Compare against `true`.
-If you only test truthiness, a failed read looks like "never granted" and you grant twice.
-
-### History
-
-```luau
-Store:History(Key: KeyLike, Limit: number?) -> Future<{ HistoryEntry }?, Reason?>
-```
-
-Up to 30 days of versions, newest first, one per UTC hour the key was written in. `Limit` is
-clamped to 1 through 100 and defaults to 25.
-`nil` means the listing failed.
-
-### PeekVersion
-
-```luau
-Store:PeekVersion(Key: KeyLike, Version: string) -> Future<D?, Reason?>
-```
-
-Folds an old version. Read only, there's no restore. See [Recovery](/docs/guides/recovery).
-
-## Writing any key
+| Call | What it does |
+| --- | --- |
+| `Edit(Key, Op, Options?)` | One change, saved before it answers. |
+| `Reset(Key, Options?)` | Replaces a key's data with the Default or a state you give. |
+| `Erase(Key, Options?)` | Removes a key. Erasable stores only. |
+| `Bump(Total, Amount, Options?)` | Adds to a total. |
+| `Leg(Key, Op, Options?)` | Builds one entry for [`Ledger.Tx`](/docs/reference/ledger). Sends nothing. |
 
 ### Edit
 
-```luau
-Store:Edit(Key: KeyLike, Kind: string, Fields: { [any]: any }?) -> Future<boolean, Reason?>
-```
+`Options` is `{ MustExist?, Id?, IdAt? }`. `MustExist` overrides the store's setting for this call. A string `Id` needs `IdAt` too. Edit is safe on a key a player session holds.
 
-Appends one op to any key and waits for the result. Works whether or not the target is online.
+| Answer | Means | Do |
+| --- | --- | --- |
+| `true` | Saved. | Done. |
+| `Refused` or `Full` | Your reducer said no, or the data would pass the size cap. `Info.State` is the data it judged. | Final for this name. Do not resend. |
+| `Missing` | `MustExist` and the key is not there. | Create it first, or turn `MustExist` off. |
+| `Spent`, `Expired`, `NoRoom` | The name is used up, forgotten, or the key's name list is full. | See [Making a change happen once](/docs/learn/once-only). |
+| `Busy` or `Closed` | Nothing was sent. | `Busy`: send the same call again later. `Closed`: stop. |
+| `Behind` or `Unreadable` | A newer build owns the key, or the key cannot be read. | Stop writing it from this build. |
+| `Unresolved` | Not known yet. `Info.Outcome` is known later. | A named Edit: send it again, same name. An unnamed one is still being sent: do not resend. |
 
-If the key has a live session on this server, `Edit` still goes through the log, so the session picks
-it up on its next fold.
+An op kind your reducer doesn't handle is refused. Studio's type check catches a kind that isn't in `Ops` before you run the game.
 
-Can return `Unresolved` when a parked transaction leg on the key could change whether the op is
-accepted. An edit that leg cannot affect returns at once.
-
-On a [typed store](/docs/concepts/typed-ops) the `Kind` is checked against the kinds you named, and
-the `Fields` against what that kind carries.
-
-`Edit` makes a new id on every call, so Ledger warns and drops an `IdAt` in `Fields`.
-
-### EditOp
+### Reset and Erase
 
 ```luau
-Store:EditOp(Key: KeyLike, Op: Op) -> Future<boolean, Reason?>
-```
-
-Appends an op you built yourself, with your own `Id`. The same op sent again applies only once. Use
-it to retry an edit that returned `Unresolved`. `Edit` creates a new id on every call. A retried
-`Edit` can apply twice.
-
-Create the id with [`Ledger.Id`](/docs/reference/ledger#ledgerid) and keep it for the retry. An op
-needs a string `Id` and a string `Kind`. `Invalid` is returned when either is missing, or when a
-field cannot be stored. Ledger copies the op. The table you pass is never changed.
-
-```luau
-local Op = { Id = Ledger.Id(), Kind = "Archive", Line = Line }
-local Ok, Why = Store:EditOp("journal", Op):Wait()
-if not Ok and Why == Ledger.Reason.Unresolved then
-	Ok, Why = Store:EditOp("journal", Op):Wait()
+local Name = Ledger.Id()
+if Name then
+	local Ok, Result = Bank:Erase(Key, { Id = Name })
 end
 ```
 
-A retry after the key has compacted the op returns `Unresolved`. The op is in the snapshot by then,
-and the record cannot say whether that id was applied.
+`Options` for both is `{ Id }` with a `Ledger.Id()` name, or nothing. A string `Id` throws, and so does `IdAt` beside it. `Reset` also takes `State`, a complete state in the newest shape. Make the name just before the call: a server answers `Expired` for its own name once it is 6 minutes old.
 
-A key keeps the ids of its last 2048 compacted ops. After it drops the id, a retry applies the op
-again. To stop that, set `IdAt` on the op. `IdAt` is the time you first sent the op, in Unix
-seconds as `os.time()` returns it. Send the same value on every retry. If the key has dropped ids
-that were compacted after `IdAt`, the write returns `Unresolved`, applies nothing and warns. An
-`IdAt` that is not a number returns `Invalid`. A time later than now counts as now.
+| Answer | Means | Do |
+| --- | --- | --- |
+| `true`, `Cut` | Done. `Cut.Losses` lists the balances that were erased. | Log `Cut.Losses` now. This is the only time you get it. |
+| `true`, no `Losses` | A repeat of the same name, already done. Also the answer for `Erase` of a key that does not exist. | Done. |
+| `Missing` | Nothing to reset or erase. | Done: the key is gone. |
+| `Expired` | The name is too old. Nothing was sent. | Make a new name. |
+| `Spent` | The name was used for something else. | Make a new name. |
+| `Busy` or `Closed` | Nothing was sent. | Send again with the same name. |
+| `Unresolved` | Not known yet. | Send again with the same name, soon. |
+| `Behind`, `Unreadable`, `Full` | A newer build owns the key, it cannot be read, or the given `State` is too big. | See [Answers](/docs/learn/answers). |
 
-On a typed store the op is checked against the kinds you named.
-
-### Transfer
-
-```luau
-Store:Transfer(From: KeyLike, To: KeyLike, Amount: number, Id: string?, Field: string?) -> Future<boolean, Reason?>
-```
-
-Moves `Amount` of a number field from one key to another. `Field` names it, and has to be a number
-field your `Default` declares. Leave it out to move the `Balance` field, which needs the store to
-name one.
-
-`From` and `To` have to be different. `Amount` has to be positive and finite. `Id` is 1 to 64
-characters when given, and giving one makes a retry safe. An `Id` belongs to one transfer. The same
-`Id` with a different field, amount or pair of keys returns [`Spent`](/docs/concepts/reasons).
-
-A delivery into a key that was erased returns [`Held`](/docs/concepts/reasons). The amount has
-already left the sender. It stays set aside on the sender's key until recovery refunds it.
-
-See [Transfers](/docs/guides/transfers).
-
-### Reserve
-
-```luau
-Store:Reserve(Key: KeyLike, Field: string, Amount: number, Id: string, Options: {
-	Hold: number?
-}?) -> Future<boolean, Reason?>
-```
-
-Holds `Amount` of a number field on one key, under `Id`, in MemoryStore. The key itself
-does not change: `Peek` shows the full field, and `Holds` shows what is held. `Field` has to name a
-number field your `Default` declares. `Id` is 1 to 64 characters.
-
-On a [typed store](/docs/concepts/typed-ops) that rule is checked, so a `Field` that isn't a number
-field of your state is a type error. `Bump`, `Total`, `Holds` and
-`Transfer` take the same check.
-
-Asking again under an `Id` already held returns `true` and holds nothing extra. After a hold is
-confirmed, released or runs out, its `Id` can be used again.
-
-Asking for more than the field has, counting what is already held, returns `Refused`. A key can
-have at most 256 holds at once. Asking for another returns `Busy`. A hold runs out in 15 minutes or
-less, so ask again later. A hold is checked against the last value Ledger read from the key. Before
-it returns `Refused`, Ledger reads the key again, so a restock is counted.
-
-`Hold` is how long to keep it, in seconds. The cap and the default are both 15 minutes, so `Hold`
-can only shorten a hold. A `Hold` above the cap throws where you wrote the call. Reserve again under
-the same `Id` to extend a hold. A hold that nobody confirms runs out on its own. There is nothing to
-refund, because the key never changed.
-
-A hold is not part of the key's state. An `Edit` can spend units another player holds, and that
-player's `Confirm` then returns `Refused`. Nothing is oversold. One checkout fails.
-
-MemoryStore has to be reachable. In Studio that means API access is on. A store with no MemoryStore,
-or one whose MemoryStore is down, returns [`Unresolved`](/docs/concepts/reasons) and holds nothing.
-The reducer still refuses at checkout, so a lost hold can cause a refused checkout but never an
-oversell.
-
-The first hold on a key costs one datastore read and four MemoryStore request units. Every hold after
-that costs two units, and a `Release` costs two.
-
-See [Reservations](/docs/guides/reservations).
-
-### Holds
-
-```luau
-Store:Holds(Key: KeyLike, Field: string) -> Future<number?, Reason?>
-```
-
-Returns how many units of `Field` are held on `Key` right now. A key nothing holds returns `0`.
-Costs one MemoryStore request unit.
-
-`nil` and [`Unresolved`](/docs/concepts/reasons) mean the MemoryStore could not be read, never that
-nothing is held.
-
-### Confirm
-
-```luau
-Store:Confirm(Key: KeyLike, Id: string, Kind: string, Fields: table?) -> Future<boolean, Reason?>
-```
-
-Spends what `Id` holds, with your own op. `Kind` and `Fields` are what you would give `Edit`, so your
-reducer decides what a checkout takes off the key and refuses one the field cannot cover. The op's id
-comes from `Id`, so a retry applies only once. The hold is released after the op is applied.
-
-A confirm needs no hold. The reducer decides whether the checkout is accepted, with or without a
-hold. A checkout whose hold ran out, or was never made because the MemoryStore was down, still sells
-what is there.
-
-On a [typed store](/docs/concepts/typed-ops) `Kind` and `Fields` are checked the way `Edit` checks
-them.
-
-The key keeps the op's id while the op is in the log, and for the next 2048 ops it compacts. A
-confirm replayed inside that window spends nothing more. Once the op is compacted into the snapshot,
-the reply is [`Unresolved`](/docs/concepts/reasons). The record cannot say whether that op was
-applied or refused.
-
-`Fields` can carry an `IdAt`, the same as on [`EditOp`](#editop). It is the time you first sent the
-confirm, in Unix seconds. Send the same value on every retry. If the key has dropped ids that were
-compacted after `IdAt`, a replay returns `Unresolved`, sells nothing and warns. Without `IdAt`, a
-replay after the key drops the id sells the units again.
-
-`Fields` can carry a [`Once`](/docs/concepts/once). A confirm with a `Once` name that is replayed
-after the key drops its id returns `Refused`, and `DidApply` returns `true` for 30 days. A name adds
-40 bytes to the key for 30 days. A key that sells 1,700 units a day fills its state with names in a
-month. Give a confirm a `Once` only when you need a lasting answer from `DidApply`. Put the `Once`
-for the grant on the player's key.
-
-Costs one datastore request and two MemoryStore request units.
-
-### Release
-
-```luau
-Store:Release(Key: KeyLike, Id: string) -> Future<boolean, Reason?>
-```
-
-Releases what `Id` holds. Nothing on the key changes, because nothing was taken.
-
-Returns `Refused` when nothing is held under that `Id`, and [`Unresolved`](/docs/concepts/reasons)
-when the MemoryStore could not be read to find out. Costs two MemoryStore request units.
+An `Erase` on a store with `Erasable = false` throws. See [Deleting data](/docs/learn/deleting-data).
 
 ### Bump
 
 ```luau
-Store:Bump(Name: string, Field: string, Amount: number) -> Future<boolean, Reason?>
+task.spawn(function() -- Bump can wait up to a minute
+	Bank:Bump("GoldAdded", Amount)
+end)
 ```
 
-String keyed stores only. Adds `Amount` to a total spread over 16 keys, named `<Name>#0` to
-`<Name>#15`. Each server writes its own shard, so servers do not queue behind each other on one key.
-`Shards` on the config sets the count, 1 to 99. Only ever raise it on a live store. With a lower
-count Ledger stops reading the highest shards, so the amounts in them drop out of every total.
-During the deploy that raises it, an old server sums only the shards it knows. Its totals are short
-until that server stops. The cached sum is kept per shard count, so a new server caches its own sum
-over every shard and never reads an old server's short one.
+The total must be declared in `Totals`. `Amount` is a whole number and may be negative. Unnamed bumps are best. After `Unresolved`, an unnamed bump is still being sent, so do not send it again. See [Global counters](/docs/learn/global-counters).
 
-`Amount` has to be positive. A total is spread over keys that cannot see each other, so nothing can
-be taken back out of one. Anything with a limit belongs on a single key, where `Reserve` can hold it.
+## Reading data
 
-A store built with `BumpEvery` queues its bumps. Every `BumpEvery` seconds the server writes one
-op per total with the sum of its queued bumps. `Bump` then returns one Future shared by every bump
-of that total in the window. If you wait on it, it returns once the window is saved, the same as
-`Commit`. If you do not wait, the bump is not saved yet, the same as `Apply`. `Destroy` and
-`CloseAll` write what is queued. A server that crashes loses the bumps of its last window. Your own
-server's totals show a queued bump immediately.
+| Call | What it does |
+| --- | --- |
+| `Peek(Key, Freshness?)` | The key's data. |
+| `Inspect(Key)` | The stored record, with its migration version. |
+| `Total(Name, MaxAge?)` | A declared total. |
+| `Follow(Key)` | An [observer](/docs/reference/observers) of the key's data. |
+| `Stale()` | An observer of keys this server wrote that its view is behind on. |
+| `Keys()` | Pages of every key. |
+
+### Peek
+
+`Freshness` is a number of seconds (0 to 2,592,000), or `{ Fresh = true }`.
+
+| Call | Gives |
+| --- | --- |
+| `Peek(Key)` | The saved data, read now. |
+| `Peek(Key, 0)` | The same: a plain `Peek`. |
+| `Peek(Key, 30)` | A recent copy that all servers share. Cheaper for a key many servers read often. See [Reading data](/docs/learn/reading-data). |
+| `Peek(Key, { Fresh = true })` | The newest saved data. Costs a write, so use it rarely. |
+
+| Answer | Means | Do |
+| --- | --- | --- |
+| the data | The key's data at some moment. | Use it. |
+| `nil, Missing` | Never saved, or erased. It does not give the Default. | Use your own default. |
+| `nil, Behind` | A newer build owns the key. | Stop using this key. A plain `Peek` and `{ Fresh = true }` answer this. `Peek(Key, MaxAge)` answers it too once the server has heard it, but a server that hasn't read the key since the update can answer the old copy once. |
+| `nil, Unresolved` | The read failed or took over 30 s. | Show "loading", try later. |
+| `nil, Busy`, `Closed`, `Unreadable` | See [Answers](/docs/learn/answers). | |
+
+`nil` never means empty. See [Reading data](/docs/learn/reading-data).
 
 ### Total
 
-```luau
-Store:Total(Name: string, Field: string, MaxAge: number?) -> Future<number?, Reason?>
-```
+`Total(Name, MaxAge?)` answers a number, or `nil, Unresolved` or `nil, Behind`. It's for totals. For a quantity, use `Quantity(Name):Total()`. A name that isn't in `Totals` or `Quantities` throws.
 
-Returns the sum cached in MemoryStore, for one request unit. The cached sum goes stale after 60 to
-75 seconds. Each server picks its own limit in that range. One server then reads every shard and
-caches the sum again. The other servers return the old sum until then. A total from another server
-is at most 90 seconds behind, plus the time one refill takes. Your own server's bumps show in its
-totals immediately.
-
-With `MaxAge`, `Total` returns this server's own last sum and makes no request while that sum is
-younger than `MaxAge` seconds. A total read every five seconds makes no requests between refills.
-
-It returns what has been added, not what the keys hold. Each shard starts at the value
-your `Default` gives the field. That baseline is taken off the sum. A total nobody has added to
-reads 0 for any `Default`.
-
-MemoryStore has to be reachable. In Studio that means API access is on. A store with no MemoryStore,
-or whose MemoryStore is down, reads every shard each time and returns the same sum. Ledger warns
-once when this happens.
-
-### Tx
+### Keys
 
 ```luau
-Store:Tx(Id: string, Legs: { TxLeg }) -> Future<boolean, Reason?>
+local Pages = Bank:Keys()
+local Page, Why = Pages:Next()
 ```
 
-Commits 2 to 4 legs all or nothing. `Id` comes first and is required, 1 to 50 characters, and has to
-be stable across retries. Running the same id again returns `true` and moves nothing.
+`Next` answers a list of up to 50 keys. `nil, nil` means the last page was read. `nil, Unresolved` means the fetch failed; the next `Next` tries the same page. Pages come in no set order.
 
-A malformed leg throws. That covers a bad key, a key used twice, and a `Once` on a leg. `Fields`
-that cannot be stored return [`Invalid`](/docs/concepts/reasons) instead, the same as `Edit`, and
-nothing is prepared.
+## Support calls
 
-Before it writes any leg, a transaction leases each of its keys in MemoryStore for ten seconds. If
-another server already holds a lease on one of those keys, `Tx` returns `Busy` at once. That costs
-one request unit and no datastore requests. Without the lease, the second server would find the same
-`Busy` after eight requests.
-
-The lease only decides which server tries first. The transaction marker still decides the outcome.
-No server waits for another. A server that cannot reach MemoryStore runs the transaction without
-leases. A lease that is never released makes `Tx` return `Busy` for at most ten seconds. A two leg
-transaction spends 8 request units on its leases.
-
-See [Transactions](/docs/guides/transactions).
-
-### Reset
-
-```luau
-Store:Reset(Key: KeyLike) -> Future<boolean, Reason?>
-```
-
-Puts the key back to `Default`, keeping `_Received` and `_Held`. A record written at a version this
-server doesn't know returns [`Behind`](/docs/concepts/reasons), not `Refused`. Nothing refused the
-write. This server cannot read what is on the key.
-
-A key with a transaction parked on it returns [`Busy`](/docs/concepts/reasons). Resetting it would
-throw away a leg the transaction still counts as committed. Settle it with `Resettle` first.
-
-### Inspect
-
-```luau
-Store:Inspect(Key: KeyLike) -> Future<Record?, Reason?>
-```
-
-The record itself rather than the state it folds to: the snapshot, the ops not yet compacted into it,
-the applied ids, and the version. `Peek` returns the folded state. `Inspect` returns the stored
-record.
-
-```luau
-local Record = Store:Inspect(UserId):Wait()
-if Record then
-	print(`{#Record.Ops} op(s) waiting on top of the snapshot`)
-	for _, Op in Record.Ops do
-		print(Op.Id, Op.Kind)
-	end
-end
-```
-
-What it returns is frozen, like everything else Ledger returns. To change a key, use `Edit`,
-`Reset` or `Erase`.
-
-### Erase
-
-```luau
-Store:Erase(Key: KeyLike) -> Future<boolean, Reason?>
-```
-
-Throws the record away and leaves a tombstone. First, Ledger delivers any transfer the key is still
-sending. If it cannot deliver one, `Erase` returns [`Busy`](/docs/concepts/reasons) and changes
-nothing. Call it again later. A transfer that cannot be delivered is refunded once it is 8 days
-old, so an `Erase` after that goes through. For 8 days the tombstone refuses transfers sent to the
-key, and each one goes back to its sender.
-See [Erase](/docs/guides/recovery#erase).
-
-The tombstone lasts the full 8 days, even if the key is written to again. An `Edit` to the key in
-that time is written and does not remove the tombstone. A session that loaded the key before the
-erase cannot save to it. On its next save, the server that holds the session warns and closes it.
-Its unsaved ops are not written, `Apply` and `Commit` then return `Closed`, and `Flush` returns
-`Refused`. Get the player off every server before you erase them.
-
-An `Erase` that finds a tombstone that has run out removes the key from the datastore. For up to 2
-minutes while it does, a write to the key returns `Busy`. If the key still holds `Once` names or
-transfer and transaction ids from the last 30 days, Ledger keeps the record and warns. Erase it again
-after they run out. A write after the tombstone runs out clears it, and the next `Erase` leaves a new
-tombstone.
-
-A key with a transaction parked on it returns [`Busy`](/docs/concepts/reasons), the same as `Reset`.
-
-`false` means the record is still there. Check it before you tell anyone their data is gone.
-
-## Watching writes
-
-### Stale
-
-```luau
-Store:Stale() -> Observer<string>
-```
-
-A stream of the keys this server has changed. Ledger pushes a key onto it once the write has gone
-through, so you can refresh a session on that key at once.
-
-```luau
-Store:Stale():Subscribe(function(Key)
-	print(`{Key} changed`)
-end)
-```
-
-These writes push a key:
-
-| method | what it pushes |
+| Call | What it does |
 | --- | --- |
-| `Edit`, `Confirm`, `Bump`, `Reset` | the key it wrote |
-| `Transfer` | both keys |
-| `Tx` | every leg key, onto that leg's own store |
+| `DidApply(Key, Name, Options?)` | Did a named op take effect? `Options` is `{ IdAt?, Probe? }`. |
+| `Losses(Key)` | The balances that a Reset or Erase erased, kept for 7 days. |
+| `Pending(Key)` | Trade work that is not finished on a key. |
+| `Resettle(Key)` | Finishes that work now. Takes no options. |
 
-Nothing else pushes. A write the reducer refuses pushes nothing, and so does a read, an `Erase` and
-every maintenance method.
+See [Support tools](/docs/guides/support-tools). `Pending` answers `Unresolved` after 30 s on a hung read, as `Peek` does.
 
-`Session:Apply` and `Session:Commit` push nothing either. That session already holds the change.
+## Quantities
 
-The key is a string. A player store keys on the `UserId`, so call `tonumber` on it before you look
-the player up.
+`Quantity(Name)` returns the [quantity object](/docs/reference/quantity). It throws if the name is not in `Quantities`.
 
-Listeners on this stream run on their own thread and may yield, which the ones on
-`Session:Observe()` may not. See [Observer](/docs/reference/observer#listeners-that-may-yield).
+## Players
 
-Use it to flush a session the moment another part of your game writes to its key. See
-[Transactions](/docs/guides/transactions#a-live-session-does-not-know-a-leg-wrote-to-it).
+| Call | What it does |
+| --- | --- |
+| `Load(Player)` | Loads the player's [session](/docs/reference/session). Yields. Answers the session, or `nil, Reason`. |
+| `Unload(Player)` | Saves and ends the session. Does nothing if there is none. |
+| `Get(Player)` | The session, or `nil`. |
+| `Expect(Player)` | The session, or throws. |
+| `IsLoaded(Player)` | `true` if a session is loaded. |
+| `WaitForLoaded(Player)` | Waits for a load that has started. |
+| `Read(Player)` | The session's data, or `nil`. |
 
-### Follow
+`Load` answers `nil, nil` if the player left. Otherwise the reason is `Unresolved`, `Missing`, `Behind`, `Busy` or `Unreadable`. Then `OnLoadFailed` runs, and the player is kicked unless `Kick = false`.
 
-```luau
-Store:Follow(Key: KeyLike) -> Observer<D>
-```
+## Destroy
 
-A stream of the state on one key. You subscribe once, and Ledger keeps the value current from the
-shared copy. Ledger reads the shared copy on a timer. The timer starts at 30 seconds. Each time the
-key has not changed, the interval doubles, up to 4 minutes. When the key changes, it goes back to
-30 seconds. Ledger pushes the state only when it changed. The first read pushes the state as it is.
-Subscribing pushes nothing, so call `Peek` with a `MaxAge` for the current value.
+`Destroy()` ends every session and observer on the store. The store takes no more calls, and its name cannot be opened again on this server. You will rarely need it.
 
-```luau
-Settings:Follow("config"):Subscribe(function(Config)
-	Apply(Config)
-end)
-```
-
-The timer starts with the first listener. It stops when the last listener disconnects. `Destroy`
-stops it too. A write on this server shows on this server's stream immediately. A write on another
-server shows after the shared copy is refilled and this server reads it on its timer. That takes at
-most 75 seconds plus one interval. To show it sooner, the writing server can send the key over
-`MessagingService`, and the receiver calls `Peek(Key, 0)`. Calling `Follow` again with the same key
-returns the same observer. `Follow` works on string keyed stores only. See
-[Following a key](/docs/guides/entity-stores#following-a-key).
-
-Listeners run inline and must not yield, the same as `Session:Observe()`. See
-[Observer](/docs/reference/observer#listeners-run-inline).
-
-## Maintenance
-
-### Resettle
-
-```luau
-Store:Resettle(Key: KeyLike) -> Future<boolean, Reason?>
-```
-
-Settles any transaction leg parked on the key and finishes any unfinished transfer on it. `true`
-means nothing is left unfinished. `Busy` means a leg is still waiting on a decision, so try again
-later.
-
-The sweeper calls this for you every minute. Call it yourself when the sweeper warns that it is
-already tracking 256 keys, or that it stopped retrying a key after five attempts.
-
-### RecoverTransfers
-
-```luau
-Store:RecoverTransfers(Key: KeyLike) -> Future<boolean, Reason?>
-```
-
-Makes the unfinished transfers on one key finish or refund now. The sweeper already does this, so it
-is for support tools.
-
-### ClearDelivered
-
-```luau
-Store:ClearDelivered(Key: KeyLike) -> Future<boolean, Reason?>
-```
-
-Drops delivered transfer ids older than 30 days from the key. Ledger also does this on its own.
-
-Both this and `RecoverTransfers` work on any store, since a transfer can move any number field.
-
-### Destroy
-
-```luau
-Store:Destroy() -> ()
-```
-
-Saves every live session, frees the name, and takes the store out of the registry. Every method
-throws afterwards.
+Next: [Session](/docs/reference/session)

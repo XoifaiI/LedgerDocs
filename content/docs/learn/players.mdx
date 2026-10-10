@@ -1,0 +1,120 @@
+---
+title: Players
+description: Getting a player's session from any script, saving now or later, and what happens when loading fails or a player leaves.
+---
+
+On [Getting started](/docs/learn/getting-started) you loaded each player when they joined and unloaded them when they left. This page covers what you do in between.
+
+## Getting a player's session
+
+Any server script can get a loaded player's session from the store:
+
+```luau
+local Session = PlayerStore:Get(Player)
+if not Session then
+	return -- still loading
+end
+```
+
+`Get` gives you `nil` until the player's data has loaded, and again once they've left. Always check for it.
+
+If your script runs while the player might still be loading, like a remote the client fires as soon as it starts, wait for the load instead:
+
+```luau
+local function OnClientReady(Player: Player)
+	local Session = PlayerStore:WaitForLoaded(Player)
+	if not Session then
+		return -- the load failed, or they left
+	end
+
+	print(Player.Name, "is ready with", Session:Get().Gold, "gold")
+end
+```
+
+`WaitForLoaded` waits for the load to finish. It gives you `nil` if the load failed or the player left.
+
+Don't keep a session around after the player leaves. Once a player is unloaded, their old session errors if you use it. Get it fresh with `PlayerStore:Get` each time instead.
+
+## `Apply` or `Commit`
+
+There are two ways to change a player's data:
+
+| | `Session:Apply` | `Session:Commit` |
+|---|---|---|
+| Shows in the data | Straight away | Once it's saved |
+| Saved | With the next save, within about 30 seconds | Before it answers |
+| Waits | No | Yes, until the save is done |
+| Use it for | Most things: coins from kills, XP, settings | Things you'd hate to lose: rare items, big spends |
+
+Saves are cheap with `Apply`: every change made in those 30 seconds goes out in one save, however many there are.
+
+Here's a rare item bought with `Commit`:
+
+```luau
+local RARE_ITEM = "GoldenDragon"
+local RARE_PRICE = 5000
+
+local function OnBuyRare(Player: Player)
+	local Session = PlayerStore:Get(Player)
+	if not Session then
+		return -- still loading
+	end
+
+	local Ok, Result = Session:Commit({ Kind = "BuyItem", Item = RARE_ITEM, Price = RARE_PRICE })
+	if not Ok then
+		print(Player.Name, "couldn't buy the dragon:", Result)
+		return
+	end
+
+	print(Player.Name, "bought the dragon and it's saved")
+end
+```
+
+When `Commit` gives back `true`, the change is saved. When it gives back `false`, the second value says why, like `"Refused"` when the reducer said no. [Answers](/docs/learn/answers) lists every reason and what to do about it.
+
+One you'll see in an outage is `"Unresolved"`: the save didn't answer in time. Ledger keeps sending it for you, so don't send it again.
+
+## Saving right now
+
+`Session:Flush()` saves anything `Apply` has waiting, without waiting for the next save. Use it before you teleport a player, so the next place sees their latest data:
+
+```luau
+local function OnGoToLobby(Player: Player)
+	local Session = PlayerStore:Get(Player)
+	if Session then
+		Session:Flush() -- save anything waiting before they leave
+	end
+
+	TeleportService:TeleportAsync(LOBBY_PLACE_ID, { Player })
+end
+```
+
+You don't need `Flush` when a player leaves or the server shuts down. `Unload` and shutdown save for you.
+
+## Changes from somewhere else
+
+A player's data can also change outside their session, for example in a [trade](/docs/learn/trading). The session doesn't see that change straight away:
+
+- **On the same server**, call `Session:Refresh()` right after, and the player sees it at once. The [Trading](/docs/learn/trading) page does this for both players.
+- **From another server**, Ledger doesn't tell this server about it. The session picks it up on its own within about 2 minutes. If it needs to show sooner, like a gift from a friend in another server, send a message with `MessagingService` and call `Refresh` on the server that receives it. [Shared data](/docs/learn/shared-data#gifts-to-players-in-other-servers) has the full code.
+
+## When loading fails
+
+If Ledger can't load a player's data, for example during a Roblox DataStore outage, it kicks them so they don't play on empty data. You can change the kick message, and run your own code when it happens:
+
+```luau
+	KickMessage = "We couldn't load your data. Please rejoin in a minute.",
+	OnLoadFailed = function(Player, Reason)
+		warn("Couldn't load", Player.Name, Reason)
+	end,
+```
+
+Both go in your store's options, next to `Default`. `OnLoadFailed` runs first, then the kick. It doesn't run when the player just left while loading.
+
+## When a player leaves
+
+`PlayerStore:Unload(Player)` saves anything waiting and ends the session. It's the `PlayerRemoving` line you already have.
+
+When the server shuts down, Ledger saves every loaded player for you. You don't need `BindToClose`.
+
+Next: [Answers](/docs/learn/answers)

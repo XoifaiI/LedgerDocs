@@ -1,0 +1,21 @@
+{
+  "title": "Learn",
+  "pages": [
+    "getting-started",
+    "your-data",
+    "bigger-reducers",
+    "players",
+    "answers",
+    "once-only",
+    "purchases",
+    "trading",
+    "shared-data",
+    "reading-data",
+    "limited-items",
+    "global-counters",
+    "changing-data",
+    "deleting-data",
+    "shutdown-and-testing",
+    "common-mistakes"
+  ]
+}

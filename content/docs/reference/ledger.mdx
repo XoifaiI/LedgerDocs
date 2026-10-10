@@ -1,189 +1,132 @@
 ---
 title: Ledger
-description: The top level module.
+description: The functions on the Ledger module itself.
 ---
 
-```luau
-local Ledger = require(ServerStorage.Ledger)
-```
-
-## Ledger.New
+Look up any function on `Ledger` itself.
 
 ```luau
-Ledger.New<D, O>(Options: TypedConfig<D, O>) -> TypedStore<D, O>
+local Name = Ledger.Id() -- a fresh name for Erase and Reset
+if Name == nil then
+	return false -- Busy: try again later
+end
+local Ok, Result = Bank:Erase(Key, { Id = Name })
 ```
 
-Builds a store. Throws when you call it if any option is invalid. Call it as `Ledger.New(Options)`
-for a store that takes any op, or as `Ledger.New<<Profile, Ops>>(Options)` for one that checks
-every write against your ops. See [Typed stores](#typed-stores).
+Ledger runs on the server only. On a client, only `Ledger.Reason` works.
 
-| Option | Type | |
+| Function | What it does |
+| --- | --- |
+| `Ledger.New<<Data, Ops>>(Config)` | Makes a [store](/docs/reference/store). Make each store once, in a `Stores` module, and require it from every script. See [Getting started](/docs/learn/getting-started). |
+| `Ledger.Id()` | Makes a name for `Erase` and `Reset`. |
+| `Ledger.Now()` | Ledger's clock in whole seconds. Use it for every `IdAt`. |
+| `Ledger.Tx(Legs, Options?)` | Changes several players or keys: all or none. |
+| `Ledger.BeforeClose(Fn)` | Runs `Fn` first when the server shuts down. |
+| `Ledger.CloseAll()` | Starts the shutdown now. Yields until it ends. |
+| `Ledger.Reason` | The names of all the answers, such as `Ledger.Reason.Busy`. |
+
+## New
+
+Takes a config table and returns the store. `Data` is the shape of one key's data, and `Ops` is the type that lists every kind of op and what it carries. Sending an op that isn't in `Ops` is a type error.
+
+| Setting | What it is |
+| --- | --- |
+| `Name` | The store's name. Never change it once players have data. |
+| `Keys` | `"Player"` for player data, `"String"` for keys you choose, like a guild id. |
+| `Default` | What a new key starts with. Every field the data will ever have. |
+| `MustExist` | `true`: a key with no saved data answers `Missing`. `false`: it starts from `Default`. |
+| `Erasable` | `true`: `Erase` works on this store. |
+| `Reducer` | Your function that applies an op. See [Your data](/docs/learn/your-data). |
+| `Balances` | Number fields Ledger changes for you. See below. |
+| `Migrations` | Changes to the data's shape. See [Changing your data](/docs/learn/changing-data). |
+| `Totals` | Counters. See [Global counters](/docs/learn/global-counters). |
+| `Quantities` | Limited stock. See [Limited items](/docs/learn/limited-items). |
+| `Schema` | A function that checks every state the reducer returns. Answer `false` and a message to refuse it. |
+| `OnLoadFailed`, `Kick`, `KickMessage` | What happens when a player's data won't load. Player stores only. See [Players](/docs/learn/players). |
+| `Mock` | A mock DataStore and MemoryStore to run on instead of the real ones, from the [Mock](https://github.com/XoifaiI/mock) package. One mock per server. See [Shutdown and testing](/docs/learn/shutdown-and-testing#testing-without-real-datastores). |
+
+The defaults below are right for almost every game. Change them only if you know you need to.
+
+| Setting | Default | What it is |
 | --- | --- | --- |
-| `Name` | `string` | Required. The datastore name, 1 to 47 characters. |
-| `Reducer` | `(State, Op) -> State?` | Required. See [Writing a reducer](/docs/concepts/reducer). |
-| `Default` | `D` | Required. The fresh state table. |
-| `Balance` | `string?` | Names a number field for [transfers](/docs/guides/transfers). |
-| `Migrations` | `{ Migration }?` | See [Migrations](/docs/guides/migrations). |
-| `Keys` | `"Player" \| "String"` | `"Player"` keys by UserId, `"String"` by any string. Defaults to `"Player"`. |
-| `Shards` | `number?` | How many keys a total is spread over, 1 to 99. Defaults to 16. Only ever raise it. See [Bump](/docs/reference/store#bump). |
-| `BumpEvery` | `number?` | How often queued bumps are written, in seconds, up to 60. Leave it out and every `Bump` is one write. See [Bump](/docs/reference/store#bump). |
-| `OnLoadFailed` | `((Player, Reason) -> boolean)?` | What to do when a load fails. See below. |
-| `Mock` | `boolean \| { Players: number?, CCU: number?, Throttled: boolean? }` | Puts this store on an in memory datastore, with the player count, CCU and throttling you give. See [Testing](/docs/guides/testing). |
+| `SaveInterval` | 30 | Seconds between a session's saves, when it has changes waiting. |
+| `IdleReadInterval` | 120 | Seconds between a session's reads, when it has nothing waiting. This is how soon a player sees changes made from other servers. |
+| `HoldMax` | 900 | The longest a `Quantity:Hold` can last, in seconds. |
+| `OrphanAge` | 86,400 | Seconds before Ledger gives up on a trade whose deciding key never appeared, and hands its amounts back. |
+| `CutWindow` | 360 | Seconds a key remembers a `Reset` or `Erase` name, so a repeat of it is safe. |
+| `Windows` | 180 | Per op kind, `{ Timed = seconds, Untimed = seconds }`: how long a key remembers a named op of that kind. See [Once only](/docs/learn/once-only). |
+| `LegLimit` | none | The most parts a `Tx` touching this store may have. |
 
-The name caps at 47 rather than the datastore's 50 because Ledger also creates `<Name>_Tx` for
-transaction markers.
-
-`Default` can't declare any key starting with `_`, and it has to be storable: numbers, strings,
-booleans, tables and buffers.
-
-Two stores can't share a name in one server. Call `Store:Destroy()` first if you need to rebuild
-one.
-
-### OnLoadFailed
-
-A load that fails kicks the player with "Your data failed to load, please rejoin". `OnLoadFailed`
-replaces that kick. It receives the player and the [reason](/docs/concepts/reasons). Return `true`
-if you handled the player, and Ledger does nothing more. Return `false` and Ledger kicks them.
+### Balances
 
 ```luau
-local Store = Ledger.New({
-	Name = "PlayerData",
-	Reducer = Reducer,
-	Default = { Gold = 0 },
-	OnLoadFailed = function(Player: Player, Why: Ledger.Reason): boolean
-		if Why == Ledger.Reason.Behind then
-			-- this server is running an old build, send them to one that isn't
-			TeleportService:Teleport(game.PlaceId, Player)
-			return true
-		end
-		return false
-	end
-})
+Balances = {
+	Gold = {
+		Credit = { "AddGold", { Kind = "Refund", Max = NO_LIMIT } },
+		Debit = "SpendGold",
+		Max = 1000000,
+	},
+},
 ```
 
-`Behind` means a newer build wrote the record. A rejoin can put the player on an old server again,
-and the load fails again. `Unresolved` is usually a datastore outage, where rejoining is the right
-fix.
+Each entry is a number field in `Default`. Ledger applies its ops itself, so your reducer never sees them.
 
-It can yield, so a teleport works. Every `WaitForLoaded` call for that player returns `nil` before
-`OnLoadFailed` runs.
+| Option | What it is |
+| --- | --- |
+| `Credit` | The op kinds that add `Amount` to the field: one name, or a list. |
+| `Debit` | The op kinds that take `Amount` away. |
+| `Min` | The field can't go below this. Default 0. |
+| `Max` | The field can't go above this. Default: no limit. |
+| `Arithmetic` | For amounts that aren't plain whole numbers, like very big numbers. Leave it out otherwise. |
 
-If it throws, Ledger warns and kicks. If it returns `true` and the player is still in the server with
-no data, Ledger warns about that too.
+A kind written as a table, `{ Kind = "Refund", Min = ..., Max = ... }`, uses its own `Min` or `Max` in place of the field's. An op of a balance kind carries `Amount`, a whole number from 1 up. Each kind can only be named once, and not with one of Ledger's own names (`Open`, `Take`, `Credit`, `Close`, `Hold`, `Confirm`, `Release`, `Bump`, `Cut`, or one starting `Debit:`). See [Your data](/docs/learn/your-data#balances-let-ledger-handle-gold).
 
-Only for `Keys = "Player"` stores. Passing it to a string keyed store makes `Ledger.New` throw.
+## Id and Now
 
-### Typed stores
+`Ledger.Id()` answers a name, or `nil, Busy` if the server cannot make one yet (for example at startup in an outage). Ask again.
 
-Give `Ledger.New` your state type and a map of your op kinds, and the store checks every write:
+Make the name just before you use it. A server answers `Expired` for its own name once it is 6 minutes old.
+
+`Ledger.Now()` counts seconds since 1 January 2026. Take it once per op, and use the same value on every retry. See [Making a change happen once](/docs/learn/once-only).
+
+## Tx
 
 ```luau
-export type Ops = {
-	Buy: { Item: string },
-	AddGold: { Amount: number },
+local Legs = {
+	PlayerStore:Leg(From, { Kind = "SpendGold", Amount = Amount }),
+	PlayerStore:Leg(To, { Kind = "AddGold", Amount = Amount }),
 }
-
-local Store = Ledger.New<<Profile, Ops>>({
-	Name = "PlayerData",
-	Default = { Gold = 100, Items = {} },
-	Reducer = Reducer,
-})
+-- Make the name once. Send the same Options again after Busy or Unresolved.
+local Options: Ledger.TxOptions = { Id = "pay:" .. HttpService:GenerateGUID(false), IdAt = Ledger.Now() }
+local Ok, Why = Ledger.Tx(Legs, Options)
 ```
 
-`Apply`, `Commit` and `Edit` then check the kind against the ones you named, and the fields against
-what that kind carries. Your reducer gets `Ledger.Op<Ops>`, which narrows on `Op.Kind`. At runtime
-the store is the same either way. See [Typed ops](/docs/concepts/typed-ops).
+Each player or key in the trade is one entry, `{ Store, Key, Op, MustExist? }`. `Store:Leg` builds one with the op type-checked. Use at least 2 entries, on different keys. The entries can be in different stores, such as a player store and a guild store. `Options` is `{ Id, IdAt }`, both or neither. `Id` is a string you make, never a `Ledger.Id()` name.
 
-## Ledger.Id
+| Answer | Means | Do |
+| --- | --- | --- |
+| `true` | Every change happened, once. | Done. |
+| `Refused` or `Full` | A rule said no. Nothing changed. `Info.Key` names the key. | Tell the player. Do not resend. |
+| `Spent` | The name was used with other terms, or the transaction was cancelled. Nothing changed. | Use a new name. |
+| `Missing` | A key that must exist is not there. | Check `Info.Key`. |
+| `Behind` | A newer build owns a key. | Stop writing it from this build. |
+| `Busy` or `NoRoom` | Nothing was sent. | Send the same name again later. |
+| `Unresolved` | Not known yet. All the changes or none will happen. | Send the same name, `IdAt` and list again. `Info.Outcome` tells you later. |
 
-```luau
-Ledger.Id() -> string
-```
+More in [Answers](/docs/learn/answers) and [Trading](/docs/learn/trading).
 
-Creates a short id that is different on every server and on every call. It is the id Ledger puts on
-its own ops. Use it for an op you build yourself, a transfer or a transaction. Create it once and
-use the same id for every retry.
-
-```luau
-local Op = { Id = Ledger.Id(), Kind = "GrantReward", Item = "Sword" }
-Store:EditOp(UserId, Op):Wait()
-```
-
-## Ledger.Reason
-
-The ten reasons, as constants. See [Reasons](/docs/concepts/reasons).
+## BeforeClose and CloseAll
 
 ```luau
-Ledger.Reason.Refused
-Ledger.Reason.Busy
-Ledger.Reason.Spent
-Ledger.Reason.Held
-Ledger.Reason.Unresolved
-Ledger.Reason.Closed
-Ledger.Reason.Backlog
-Ledger.Reason.Full
-Ledger.Reason.Invalid
-Ledger.Reason.Behind
-```
-
-## Ledger.Sweep
-
-```luau
-Ledger.Sweep() -> ()
-```
-
-Runs a sweeper pass now. It finishes unfinished transfers, settles parked transaction legs and
-removes old transaction markers. The sweeper does this on its own, so this is for tests and
-incidents.
-
-## Ledger.CloseAll
-
-```luau
-Ledger.CloseAll() -> ()
-```
-
-Shuts everything down, in this order:
-
-1. Stops the sweeper.
-2. For each key, keeps only the newest datastore call that is waiting in the queue. The calls it
-   drops return `Closed`.
-3. Cuts datastore retries to 2 attempts.
-4. Stops every `Follow` timer, writes every queued bump, and saves every live session.
-5. Yields until those saves finish.
-
-Call it from `BindToClose`, and put nothing else in that callback.
-
-```luau
-game:BindToClose(function()
-	Ledger.CloseAll()
+Ledger.BeforeClose(function()
+	-- runs first when the server shuts down, for up to 5 seconds
 end)
 ```
 
-## Exported types
+Roblox already starts the shutdown for you. Call `CloseAll` only to end it sooner. `BeforeClose` throws if the server is already closing. See [Shutdown and testing](/docs/learn/shutdown-and-testing).
 
-```luau
-Ledger.Store<D>
-Ledger.TypedStore<D, O>
-Ledger.Session<S>
-Ledger.TypedSession<S, O>
-Ledger.Op
-Ledger.Op<O>
-Ledger.OpOf<O, K>
-Ledger.OpMap
-Ledger.Reducer<S, O>
-Ledger.Frozen<S>
-Ledger.Reason
-Ledger.KeyLike
-Ledger.KeysMode
-Ledger.TxLeg
-Ledger.HoldOptions
-Ledger.Migration
-Ledger.Config<D>
-Ledger.TypedConfig<D, O>
-Ledger.Record<D>
-Ledger.HistoryEntry
-Ledger.Future<T...>
-Ledger.Observer<T>
-```
+## Reason
 
-See [Types](/docs/reference/types).
+`Ledger.Reason.Refused == "Refused"`. Use it to avoid mistyping an answer. There are 15 answers; see [Answers](/docs/learn/answers).
+
+Next: [Store](/docs/reference/store)

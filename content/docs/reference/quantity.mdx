@@ -1,0 +1,92 @@
+---
+title: Quantity
+description: Split stock that many servers can sell at once.
+---
+
+Sell a limited item from many servers at once.
+
+```luau
+local Sword = Shop:Quantity("Sword")
+
+local Options: Ledger.TakeOptions = { Id = "sword:" .. HttpService:GenerateGUID(false), IdAt = Ledger.Now() }
+local Ok, Result = Sword:Take(1, Options)
+```
+
+A quantity is a stock of units split over parts, so many servers can sell without waiting for each other. Declare it in the store's `Quantities`, then get it with `Store:Quantity(Name)`. See [Limited items](/docs/learn/limited-items).
+
+```luau
+Quantities = {
+	Sword = { Parts = 2, Mode = "Final", Stock = 100 },
+	Pot = { Parts = 2, Mode = "Open" },
+}
+```
+
+| Setting | Means |
+| --- | --- |
+| `Parts` | 1 to 64. More parts let more servers sell at once. |
+| `Mode` | `"Final"`: a fixed stock that never refills. `"Open"`: a pot you can add to. |
+| `Stock` | Final only, and a Final quantity must declare it. Open leaves it out. |
+| `Serials` | Final only. `{ First, Count }`: each unit has a number. `Count` must equal `Stock`. |
+| `Proceeds` | Up to 4 [balance fields](/docs/reference/ledger#balances) of the store that a take's `Price` is paid into. |
+| `Closed` | `true` makes `Open` throw in this build. A restock is a new quantity. |
+
+Do not change `Parts`, `Mode`, `Stock`, `Serials` or `Proceeds` of a live quantity. Declare a new name instead.
+
+## Calls
+
+| Call | What it does |
+| --- | --- |
+| `Open()` | Creates the parts. Once ever. Never after `Close`. |
+| `Take(Count, Options?)` | Sells units. |
+| `Hold(Count, Seconds)` | Keeps units for a buyer for up to 900 s. |
+| `Confirm(Hold, Options?)` | Turns a hold into a sale. |
+| `Release(Hold)` | Gives a hold back. |
+| `Total(MaxAge?)` | `{ Sold, Free, Held }`. |
+| `Close()` | Ends the sale and removes empty parts. |
+| `Deposit`, `Gather`, `Withdraw` | Move units or proceeds. See below. |
+
+### Take
+
+`Options` is `{ Price?, Id?, IdAt?, Legs? }`. Give `Id` and `IdAt` together: a named take is safe to resend. `Legs` are changes to other keys, such as the buyer's coins. The take and those changes happen together. `Price` adds to the quantity's proceeds and takes nothing from the buyer, so charge the buyer in `Legs`.
+
+On `true`, `Result` is `{ Part, Value }`. `Value` is the serial number, or `nil` without `Serials`.
+
+| Answer | Means | Do |
+| --- | --- | --- |
+| `true` | Sold. | Done. |
+| `SoldOut` | A Final quantity has none left, for good. | Stop selling it. |
+| `Short` | Too few free units right now. `Info.ShortReason` is `"Free"`, `"Held"`, `"Holds"` or `"Gone"`. | Tell the player. A named take needs a new name to try again. |
+| `Missing` | Not opened yet, closed and removed, or a key in `Legs` is missing. | `Open()` once if it was never opened. |
+| `Refused` or `Full` | A rule said no. `Info.Key` names the key. | Tell the player. |
+| `Busy` or `Closed` | Nothing was sent. | `Busy`: send the same call again. |
+| `Unresolved` | Not known yet. | Unnamed: Ledger keeps sending it, so wait on `Info.Outcome`. Named: send again with the same `Id` and `IdAt`. |
+
+### Hold and Confirm
+
+```luau
+local Ok, Hold = Sword:Hold(1, 120)
+if Ok and typeof(Hold) == "table" then
+	-- later, when the buyer pays
+	Sword:Confirm(Hold)
+end
+```
+
+`Hold` answers `true, Hold`, `SoldOut` or `Short`. `Confirm` takes the same `Price` and `Legs` as `Take`. If the hold ran out, `Confirm` uses a free unit; if there is none it answers `Short` with `ShortReason "Gone"`, never `SoldOut`. `Release(Hold)` answers `true`.
+
+### Total and Close
+
+`Total(15)` answers `{ Sold, Free, Held }`. `Free` and `Held` are advice. After `Close`, count sold as `Stock - Free - Held`.
+
+`Close()` answers `true` and `{ Removed, Left, Missing }`, lists of part numbers. A part is removed when it is empty and more than 62 minutes old. Parts in `Left` stay closed. Any server may call it, and again later.
+
+### Open quantities only
+
+| Call | What it does |
+| --- | --- |
+| `Deposit(Count, Options?)` | Adds units. `Options` is `{ From?, Field?, Kind?, Part? }`; `From` pays for them from a key's balance field, one with a `Debit` kind in its store's `Balances`. |
+| `Gather(Count, To, Field, Options?)` | Moves units into a key's balance field, one with a `Credit` kind in its store's `Balances`. `To` is `{ Store, Key }`. `Options.Kind` picks the kind when there are several. |
+| `Withdraw(Count, Part, To, Field, Options?)` | Moves units or proceeds out of a part. |
+
+On a Final quantity, `Deposit` and `Gather` throw.
+
+Next: [Observers and futures](/docs/reference/observers)
