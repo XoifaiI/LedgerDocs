@@ -162,4 +162,61 @@ Everything else means the same as on [Answers](/docs/learn/answers), and nothing
 
 A leg can be any key in any store, so the same code moves gold from a player into a [guild bank](/docs/learn/shared-data), or between three players at once. Each key can only be in a trade once.
 
+## Items with their own data
+
+Some items are one of a kind like a serial number or past owners. Don't carry that data in the trade's ops. One op in a trade can be at most 4,096 bytes, and a list of past owners only grows.
+
+Give each item its own key instead, in a store of its own, and keep only the item's id in the player's data:
+
+```luau
+export type ItemData = {
+	Owner: number,
+	Wear: number,
+	Owners: { number },
+}
+
+type ItemOps = {
+	ChangeOwner: { From: number, To: number },
+}
+
+local ItemStore = Ledger.New<<ItemData, ItemOps>>({
+	Name = "Items",
+	Keys = "String",
+	Default = { Owner = 0, Wear = 0, Owners = {} },
+	MustExist = true,
+	Erasable = false,
+	Reducer = function(Data, Op)
+		if Op.Kind == "ChangeOwner" then
+			if Data.Owner ~= Op.From then
+				return nil -- not theirs to give
+			end
+
+			local Owners = table.clone(Data.Owners)
+			table.insert(Owners, Op.To)
+
+			local New = table.clone(Data)
+			New.Owner = Op.To
+			New.Owners = Owners
+			return New
+		end
+
+		return nil
+	end,
+})
+```
+
+Trading the item is then one trade with a leg for each player and one for the item. The players' ops carry only the id:
+
+```luau
+local Ok, Result = Ledger.Tx({
+	PlayerStore:Leg(SellerId, { Kind = "RemoveItem", ItemId = ItemId }),
+	PlayerStore:Leg(BuyerId, { Kind = "AddItem", ItemId = ItemId }),
+	ItemStore:Leg(ItemId, { Kind = "ChangeOwner", From = SellerId, To = BuyerId }),
+})
+```
+
+The item's own reducer adds to its history, so the history never travels in an op, however long it gets. To show an item, `Peek` it by its id.
+
+Each item adds one key to the trade, and how many keys fit depends on their length, so keep item ids short. See [Limits](/docs/limits).
+
 Next: [Shared data](/docs/learn/shared-data)
