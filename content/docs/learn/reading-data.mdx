@@ -28,6 +28,8 @@ The data is read-only. To change it, use `Edit`, as on [Shared data](/docs/learn
 
 For a player in a session somewhere, `Peek` gives what was last saved. That can be a little behind what the player sees, until their next save.
 
+Roblox keeps a 4-second cache of DataStore reads. Ledger always turns it off, so a plain `Peek`, a `Load` and every other read Ledger makes come from the DataStore itself, never from a copy up to 4 seconds old. You don't need to set anything.
+
 ## When `Peek` says no
 
 `nil` never means "empty", so always look at the reason:

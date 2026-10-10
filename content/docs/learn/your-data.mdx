@@ -226,6 +226,44 @@ local NO_LIMIT = 2 ^ 53 - 1
 
 For one player's gold, a reducer works just as well. Balances start to matter in [trades](/docs/learn/trading): while a trade is in progress, it holds the player's data until it finishes, and their other changes wait. A gold op in a trade doesn't hold anything. It only sets the amount aside, so the player can keep earning and spending meanwhile. Shops, auctions and guild banks that many servers trade with at once rely on that, as in [Auctions and markets](/docs/guides/auctions-and-markets).
 
+## Checking the shape with `Schema`
+
+A reducer can still return data in the wrong shape, like a negative count or a field set to a string. `Schema` is a last check on every state your reducer returns:
+
+```luau
+	Schema = function(Data): (boolean, string?)
+		for Item, Count in Data.Inventory do
+			if Count < 1 then
+				return false, `{Item} has a count of {Count}`
+			end
+		end
+
+		return true, nil
+	end,
+```
+
+Return `true, nil` to keep the state, or `false` and a message to refuse it. A refused state isn't saved, the call answers `Refused` as if the reducer had returned `nil`, and Ledger warns in the output with the store, the op kind and your message.
+
+You can use any validator that answers the same way. The [t](https://github.com/osyrisrblx/t) package does:
+
+```luau
+local IsPlayerData = t.strictInterface({
+	Gold = t.integer,
+	Inventory = t.map(t.string, t.integer),
+})
+
+	Schema = function(Data): (boolean, string?)
+		return IsPlayerData(Data)
+	end,
+```
+
+A few things to know:
+
+- **It only sees what the reducer returns.** Balance ops never reach the reducer, so `Schema` doesn't check them. Limit a balance with `Min` and `Max` instead.
+- **It doesn't check old saves.** What a [migration](/docs/learn/changing-data) returns, and data saved by an older version of your game, aren't checked.
+- **Same rules as the reducer.** No waiting, no Ledger calls, no randomness, and don't change the data it's given.
+- **It runs on every op.** Keep it quick: check what can go wrong, not every field on every change.
+
 ## `MustExist` and `Erasable`
 
 Every store has to say these two:
