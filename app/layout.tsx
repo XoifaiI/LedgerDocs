@@ -15,7 +15,7 @@ export const metadata: Metadata = {
     template: `%s | ${appName}`,
   },
   description:
-    "A lock free datastore library for Roblox, where state is a fold over a log of changes.",
+    "Safe player data for Roblox: every change saved once, and every answer says what happened.",
 };
 
 export default function Layout({ children }: LayoutProps<"/">) {
