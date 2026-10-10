@@ -13,11 +13,11 @@ Ledger 7 is rebuilt from scratch. It's cheaper, holds more, and every edge case 
 
 | A trade between two players | v6 | v7 |
 |---|---|---|
-| DataStore requests | 8 | **2** |
+| DataStore requests | 8 | **3** |
 | MemoryStore requests | 8 | **0** |
 | Players or keys in one trade | up to 4 | **up to 29** |
 
-You can run about 4 times as many trades on the same DataStore budget, and they no longer use any MemoryStore.
+You can run more than twice as many trades on the same DataStore budget, and they no longer use any MemoryStore. A v7 trade also answers after 2 of its 3 requests.
 
 ### More room
 

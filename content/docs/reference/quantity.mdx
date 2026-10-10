@@ -51,6 +51,8 @@ Do not change `Parts`, `Mode`, `Stock`, `Serials` or `Proceeds` of a live quanti
 
 On `true`, `Result` is `{ Part, Value }`. `Value` is the serial number, or `nil` without `Serials`.
 
+If you build the options in a separate function, give them the type `Ledger.TakeOptions`, or build each leg with `Store:Leg`. Otherwise Studio's type check can't tell which op goes with which store, and complains.
+
 | Answer | Means | Do |
 | --- | --- | --- |
 | `true` | Sold. | Done. |

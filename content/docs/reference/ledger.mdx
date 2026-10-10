@@ -41,9 +41,21 @@ Takes a config table and returns the store. `Data` is the shape of one key's dat
 | `Migrations` | Changes to the data's shape. See [Changing your data](/docs/learn/changing-data). |
 | `Totals` | Counters. See [Global counters](/docs/learn/global-counters). |
 | `Quantities` | Limited stock. See [Limited items](/docs/learn/limited-items). |
-| `Schema` | A function that checks every state the reducer returns. Answer `false` and a message to refuse it. |
+| `Schema` | A function that checks every state the reducer returns. Return `true, nil` to keep it, or `false` and a message to refuse it. |
 | `OnLoadFailed`, `Kick`, `KickMessage` | What happens when a player's data won't load. Player stores only. See [Players](/docs/learn/players). |
 | `Mock` | A mock DataStore and MemoryStore to run on instead of the real ones, from the [Mock](https://github.com/XoifaiI/mock) package. One mock per server. See [Shutdown and testing](/docs/learn/shutdown-and-testing#testing-without-real-datastores). |
+
+If you write a `Schema`, give it a return type and always return both values, or Studio's type check will complain:
+
+```luau
+Schema = function(Data): (boolean, string?)
+	if Data.Gold < 0 then
+		return false, "Gold went below zero"
+	end
+
+	return true, nil
+end,
+```
 
 The defaults below are right for almost every game. Change them only if you know you need to.
 

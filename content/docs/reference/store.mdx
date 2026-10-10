@@ -16,7 +16,9 @@ local State, Why = Bank:Peek(Key, 30) -- up to 30 s old is fine
 
 A store holds one name and every key under it. A key is a string, or a `Player` or UserId in a player store. Most calls work on any store. The player calls (`Load` and friends) work on player stores only, and throw on a string store.
 
-A bad call throws before anything is sent: an unknown op kind, a bad key, a wrong option name, or a call made from inside a reducer. Answers are never thrown. See [Answers](/docs/learn/answers).
+A bad call throws before anything is sent: a bad key, a wrong option name, or a call made from inside a reducer. Answers are never thrown. See [Answers](/docs/learn/answers).
+
+An op kind that isn't in your `Ops` type doesn't throw. Your reducer gets it, returns `nil`, and the call answers `Refused`. With `--!strict`, Studio's type check catches it before you run the game.
 
 ## Changing data
 
@@ -57,9 +59,9 @@ end
 
 | Answer | Means | Do |
 | --- | --- | --- |
-| `true`, `Cut` | Done. `Cut.Losses` lists the balances that were erased. | Log `Cut.Losses` now. This is the only time you get it. |
-| `true`, no `Losses` | A repeat of the same name, already done. Also the answer for `Erase` of a key that does not exist. | Done. |
-| `Missing` | Nothing to reset or erase. | Done: the key is gone. |
+| `true`, `Cut` | Done. `Cut.Losses` lists the balances that were erased, newest last. | Log `Cut.Losses` now. After an `Erase` this is the only time you get it. After a `Reset`, `Store:Losses` keeps them for 7 days. |
+| `true`, no `Losses` | A repeat of the same name, already done. Also what `Erase` with a `Ledger.Id()` name answers for a key that was never saved. | Done. |
+| `Missing` | Nothing to reset or erase. `Erase` with no name answers this for a key that was never saved. | Done: the key is gone. |
 | `Expired` | The name is too old. Nothing was sent. | Make a new name. |
 | `Spent` | The name was used for something else. | Make a new name. |
 | `Busy` or `Closed` | Nothing was sent. | Send again with the same name. |
