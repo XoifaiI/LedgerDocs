@@ -23,8 +23,6 @@ Ledger 7 is rebuilt from scratch. It's cheaper, holds more, and every edge case 
 | Limited item sales a minute, never oversold | none | **900,000** |
 | Global counter adds a minute | none | **unlimited, for 1.6% of your write budget** |
 
-A trade between two players costs 3 DataStore requests instead of 8, and no MemoryStore at all. It answers after 2 of the 3. The trade size limit is in bytes, so 29 players assumes 16-character keys; see [Limits](/docs/limits).
-
 ### What's new
 
 - **Balances.** Number fields like gold or gems that you change with `Credit` and `Debit` ops, with `Min` and `Max` limits. They never hold up a trade.
