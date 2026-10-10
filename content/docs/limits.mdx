@@ -51,6 +51,7 @@ A key remembers the names of recent ops, so a resend does nothing twice.
 | --- | --- |
 | `Ledger.Id()` | `Busy` after 5 s with no server number. |
 | A read (`Peek`, `Inspect`, `Losses`, `Resettle`) | `Unresolved` after 30 s. `Pending` too, on a hung read. |
+| `Edit` | `Unresolved` after 30 s once sent. Ledger keeps sending it. |
 | `Bump` | 0 to 60 s, up to 90 s if saves fail. Call it in `task.spawn`. |
 | `Erase` | About 200 s at worst. |
 | `Peek` of a key where a crashed server left trade work | Up to about 30 minutes `Unresolved`. Call `Resettle` to end it now. |
@@ -71,7 +72,7 @@ A key remembers the names of recent ops, so a resend does nothing twice.
 
 | | Limit |
 | --- | --- |
-| `Ledger.Tx` keys | 2 or more, all different. Up to 29 with 16-character keys; fewer with long names. |
+| `Ledger.Tx` keys | 2 or more, all different. The limit is in bytes, not a count: one key in the trade keeps a list of all the others, and that list has a size cap. About 29 keys fit with 16-character keys, 40 with 5-character keys, fewer with long keys or keys in other stores. Too many throws before anything is sent. |
 | `Take` `Legs` | One fewer than the `Tx` limit. |
 | Quantity `Parts` | 1 to 64. |
 | `Proceeds` fields | Up to 4. |

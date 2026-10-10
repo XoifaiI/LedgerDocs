@@ -44,6 +44,11 @@ An op kind that isn't in your `Ops` type doesn't throw. Your reducer gets it, re
 | `Behind` or `Unreadable` | A newer build owns the key, or the key cannot be read. | Stop writing it from this build. |
 | `Unresolved` | Not known yet. `Info.Outcome` is known later. | A named Edit: send it again, same name. An unnamed one is still being sent: do not resend. |
 
+Two things you may see:
+
+- **`Busy` right after you resend a named Edit.** After `Unresolved`, Ledger keeps sending the first one itself, and it won't send the same name twice at once. Expect `Busy` for a moment, then send it again. The name makes sure it only counts once.
+- **An Edit that waits.** If a trade is still being finished on the key, the Edit waits for it. When the server running that trade has gone down, finishing it takes longer, and the Edit answers `Unresolved` after 30 seconds rather than `Busy`. Ledger keeps sending it after that.
+
 An op kind your reducer doesn't handle is refused. Studio's type check catches a kind that isn't in `Ops` before you run the game.
 
 ### Reset and Erase
