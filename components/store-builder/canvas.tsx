@@ -35,6 +35,11 @@ import {
   TOOLBOX,
 } from "@/lib/store-builder/toolbox";
 
+// Phones get the slim toolbox rail and a smaller start zoom; the width matches Tailwind's md.
+function narrow(): boolean {
+  return !window.matchMedia("(min-width: 768px)").matches;
+}
+
 // How long field-name redraws wait for typing to pause.
 const REDRAW_DELAY = 150;
 
@@ -182,7 +187,13 @@ function CanvasView({
         plugins: { connectionChecker: CHECKER },
         sounds: false,
         trashcan: false,
-        zoom: { wheel: true, startScale: 0.75, maxScale: 1.6, minScale: 0.35 },
+        zoom: {
+          wheel: true,
+          // A phone fits more at a smaller start.
+          startScale: narrow() ? 0.6 : 0.75,
+          maxScale: 1.6,
+          minScale: 0.35,
+        },
         grid: {
           spacing: 24,
           length: 2,
@@ -366,12 +377,12 @@ function CanvasView({
     <div
       ref={areaRef}
       className={cn(
-        "relative min-h-0 flex-1 overflow-hidden rounded-xl bg-fd-background",
+        "relative min-h-0 flex-1 overflow-hidden bg-fd-background md:rounded-xl",
         hidden && "hidden",
       )}
     >
       <div ref={hostRef} className="absolute inset-0" />
-      <div className="absolute end-5 bottom-5 z-[80] flex gap-0.5 rounded-lg border bg-fd-card/80 p-0.5 shadow-sm backdrop-blur">
+      <div className="absolute end-3 bottom-3 z-[80] md:end-5 md:bottom-5 flex gap-0.5 rounded-lg border bg-fd-card/80 p-0.5 shadow-sm backdrop-blur">
         {tools.map(([label, run, Icon]) => (
           <button
             key={label}

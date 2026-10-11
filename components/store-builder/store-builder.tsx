@@ -3,6 +3,7 @@
 // The store builder: settings in the sidebar, logic as blocks, and the Stores module they make.
 
 import { buttonVariants } from "fumadocs-ui/components/ui/button";
+import { RotateCcw } from "lucide-react";
 import {
   type ReactNode,
   useCallback,
@@ -317,15 +318,15 @@ export function StoreBuilder() {
   );
 
   return (
-    <div className="ledger-builder isolate flex h-[calc(100dvh-3.5rem)] min-h-[32rem] w-full gap-4 p-2 sm:p-4">
+    <div className="ledger-builder isolate flex h-[calc(100dvh-3.5rem)] min-h-[32rem] w-full md:gap-4 md:p-4">
       <aside
         aria-label="Store settings"
         className={cn(
           tab === "store" ? "flex" : "hidden",
-          "w-full shrink-0 flex-col overflow-hidden rounded-xl border bg-fd-card md:flex md:w-[22rem]",
+          "w-full shrink-0 flex-col overflow-hidden bg-fd-card md:flex md:w-[22rem] md:rounded-xl md:border",
         )}
       >
-        <div className="flex gap-3.5 border-b px-4 md:hidden" role="tablist">
+        <div className="flex gap-3 border-b px-3 md:hidden" role="tablist">
           {tabs}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2 [scrollbar-width:thin]">
@@ -346,10 +347,13 @@ export function StoreBuilder() {
         aria-label="Blocks and Luau"
         className={cn(
           tab === "store" ? "hidden" : "flex",
-          "min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-fd-secondary md:flex",
+          "min-w-0 flex-1 flex-col overflow-hidden bg-fd-secondary md:flex md:rounded-xl md:border",
         )}
       >
-        <div className="flex items-center gap-3.5 ps-4 pe-2" role="tablist">
+        <div
+          className="flex items-center gap-3 ps-3 pe-2 md:gap-3.5 md:ps-4"
+          role="tablist"
+        >
           {tabs}
           <div className="ms-auto flex items-center gap-2 py-1">
             {confirmReset ? (
@@ -375,10 +379,15 @@ export function StoreBuilder() {
             ) : (
               <button
                 type="button"
-                className={buttonVariants({ color: "secondary", size: "sm" })}
+                className={cn(
+                  buttonVariants({ color: "secondary", size: "sm" }),
+                  "[&_svg]:size-3.5",
+                )}
                 onClick={() => setConfirmReset(true)}
+                aria-label="Load example"
               >
-                Load example
+                <RotateCcw className="sm:hidden" />
+                <span className="max-sm:hidden">Load example</span>
               </button>
             )}
           </div>

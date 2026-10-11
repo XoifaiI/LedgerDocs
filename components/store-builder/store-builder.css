@@ -165,3 +165,33 @@
   font-size: 0.8125rem;
   opacity: 1;
 }
+
+/* Phones: the toolbox becomes a slim rail, each category a dot over a small label, so the
+   canvas keeps most of the width. Matches Tailwind's md breakpoint. */
+@media (max-width: 767px) {
+  .ledger-builder .blocklyToolbox {
+    padding: 0.25rem;
+  }
+
+  .ledger-builder .blocklyToolbox .blocklyTreeRowContentContainer {
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.5rem 0.25rem;
+    text-align: center;
+  }
+
+  .ledger-builder .blocklyToolbox .blocklyToolboxCategoryIcon {
+    width: 0.625rem;
+    height: 0.625rem;
+  }
+
+  .ledger-builder .blocklyToolbox .blocklyToolboxCategoryLabel {
+    font-size: 0.625rem;
+    line-height: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .ledger-builder .blocklyToolbox .blocklyTreeSeparator {
+    margin: 0.25rem 0.5rem;
+  }
+}
