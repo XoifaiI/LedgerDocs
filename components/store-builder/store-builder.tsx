@@ -14,13 +14,10 @@ import {
 } from "react";
 import { cn } from "@/lib/cn";
 import { Blockly } from "@/lib/store-builder/blockly";
-import {
-  CHECK_HAT,
-  MIGRATION_HAT,
-  OP_HAT,
-} from "@/lib/store-builder/blocks/contexts";
+import { OP_HAT } from "@/lib/store-builder/blocks/contexts";
 import { exampleProject } from "@/lib/store-builder/example";
 import { generateStores } from "@/lib/store-builder/luau/module";
+import { placeOf } from "@/lib/store-builder/luau/places";
 import type {
   BlockProblem,
   Problem,
@@ -28,7 +25,7 @@ import type {
 } from "@/lib/store-builder/problem";
 import { Canvas, loadExample } from "./canvas";
 import { ProblemsByTarget } from "./controls";
-import { LuauPanel, SECTION_TITLES } from "./luau-panel";
+import { LuauPanel } from "./luau-panel";
 import { Sidebar } from "./sidebar";
 import { readSaved, useProject, writeSaved } from "./use-project";
 import "./store-builder.css";
@@ -76,27 +73,6 @@ function TabButton({
       {children}
     </button>
   );
-}
-
-// Where a problem is, in words: the hat a block sits under, or the sidebar section.
-function placeOf(
-  workspace: Blockly.WorkspaceSvg | null,
-  problem: Problem,
-): string {
-  if (problem.kind === "setting") {
-    return SECTION_TITLES[problem.section];
-  }
-  const root = workspace?.getBlockById(problem.blockId)?.getRootBlock();
-  switch (root?.type) {
-    case OP_HAT:
-      return `op ${root.getFieldValue("NAME")}`;
-    case CHECK_HAT:
-      return "Check";
-    case MIGRATION_HAT:
-      return `Migration ${root.getFieldValue("INDEX")}`;
-    default:
-      return "Block";
-  }
 }
 
 type Result = { code: string; problems: Problem[]; opKinds: string[] };

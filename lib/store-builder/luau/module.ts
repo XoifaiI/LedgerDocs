@@ -27,10 +27,19 @@ import * as data from "./data";
 import { defaultValue } from "./defaults";
 import { LuauGenerator } from "./generator";
 import * as hats from "./hats";
+import { placeOf } from "./places";
 import { blockProblems, migrationIndex } from "./problems";
 import { startupProblems } from "./startup";
 import { luauNumber, luauString, tableKey } from "./strings";
 import * as values from "./values";
+
+// A module with problems stops here: the lone ! is one clean syntax error, and the comment beside
+// it says why.
+export const STOP_LINE =
+  "! -- Fix the problems above in the store builder, then copy this file again.";
+
+// The --!strict line and the made-with line come before the problem list.
+const HEADER_LINES = 2;
 
 export type Generated = {
   code: string;
@@ -508,6 +517,20 @@ export function generateStores(
       ...startupProblems(checks, project),
     ]),
   ];
+  if (problems.length > 0) {
+    // A store with problems must not run by mistake: list them, then a line that can't compile.
+    const listed = problems.map(
+      (problem) => `--   ${placeOf(workspace, problem)}: ${problem.message}`,
+    );
+    out.splice(
+      HEADER_LINES,
+      0,
+      `-- ⚠ ${problems.length === 1 ? "1 problem" : `${problems.length} problems`} to fix in the store builder first, so this file won't compile:`,
+      ...listed,
+      STOP_LINE,
+      "",
+    );
+  }
   return { code: `${out.join("\n")}\n`, problems };
 }
 

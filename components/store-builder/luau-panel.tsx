@@ -12,17 +12,7 @@ import {
 } from "lucide-react";
 import { type ComponentProps, memo, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
-import type { Problem, SectionId } from "@/lib/store-builder/problem";
-
-export const SECTION_TITLES: Record<SectionId, string> = {
-  store: "Store",
-  data: "Data",
-  balances: "Balances",
-  totals: "Totals",
-  quantities: "Quantities",
-  players: "Players",
-  timing: "Timing & testing",
-};
+import type { Problem } from "@/lib/store-builder/problem";
 
 export type ProblemPlace = (problem: Problem) => string;
 

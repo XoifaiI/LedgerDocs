@@ -74,6 +74,8 @@ export class LuauGenerator extends Blockly.CodeGenerator {
   // Each op block's handler name, given out before any body is made.
   readonly handlerNames = new Map<string, string>();
   readonly loops = new Map<string, LoopNames>();
+  // Problems already marked in the code.
+  private readonly marked = new Set<BlockProblem>();
 
   constructor(project: Project) {
     super("Luau");
@@ -220,6 +222,9 @@ export class LuauGenerator extends Blockly.CodeGenerator {
     if (comment && out) {
       out = `${this.prefixLines(comment, "-- ")}\n${out}`;
     }
+    if (!block.outputConnection) {
+      out = this.markProblems(block) + out;
+    }
     if (thisOnly) {
       return out;
     }
@@ -229,9 +234,33 @@ export class LuauGenerator extends Blockly.CodeGenerator {
     }
     if (stepEnds(block)) {
       this.problem(next, "This never runs: the step above always refuses.");
-      return out;
+      return out + this.markProblems(next);
     }
     return out + this.blockToCode(next);
+  }
+
+  // A comment above a step for each problem found in it or in the values plugged into it, so
+  // the code shows where its stand-ins are.
+  private markProblems(step: Block): string {
+    const ids = new Set<string>();
+    const gather = (block: Block) => {
+      ids.add(block.id);
+      for (const input of block.inputList) {
+        const target = input.connection?.targetBlock();
+        if (target?.outputConnection) {
+          gather(target);
+        }
+      }
+    };
+    gather(step);
+    let marks = "";
+    for (const problem of this.problems) {
+      if (ids.has(problem.blockId) && !this.marked.has(problem)) {
+        this.marked.add(problem);
+        marks += `-- ⚠ Fix in the builder: ${problem.message}\n`;
+      }
+    }
+    return marks;
   }
 
   override scrubNakedValue(_line: string): string {

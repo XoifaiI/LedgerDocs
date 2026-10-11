@@ -86,6 +86,13 @@ export function ledger_param(): string {
   return "";
 }
 
+// Param types as the param block's dropdown names them.
+const PARAM_LABELS = {
+  number: "number",
+  string: "text",
+  boolean: "true/false",
+};
+
 function opRead(block: Block, generator: LuauGenerator): [string, number] {
   const name: string = block.getFieldValue("PARAM");
   const type = OP_READS[block.type];
@@ -98,7 +105,7 @@ function opRead(block: Block, generator: LuauGenerator): [string, number] {
   } else if (op && !param) {
     generator.problem(block, `This op doesn't take ${name}.`);
   } else if (param && param.type !== type) {
-    generator.problem(block, `${name} isn't a ${type} any more.`);
+    generator.problem(block, `${name} isn't a ${PARAM_LABELS[type]} any more.`);
   }
   if (!param || param.type !== type) {
     return [
