@@ -1,11 +1,18 @@
 "use client";
 
+import { CASINGS, type Casing } from "@/lib/store-builder/casing";
 import { settingId } from "@/lib/store-builder/problem";
 import type { Project } from "@/lib/store-builder/project";
 import { Labelled, Segmented, Switch, TextInput } from "../controls";
 import type { Update } from "../use-project";
 
 const id = settingId.store;
+
+const CASING_EXAMPLES: Record<Casing, string> = {
+  pascal: "local function BuyItem(Data, Op), as in Ledger's docs.",
+  camel: "local function buyItem(data, op), as in Roblox's style guide.",
+  snake: "local function buy_item(data, op).",
+};
 
 export function StoreSettings({
   project,
@@ -99,6 +106,19 @@ export function StoreSettings({
           />
         </Labelled>
       </div>
+      <Labelled
+        label="Code style"
+        htmlFor={id("casing")}
+        help={`${CASING_EXAMPLES[store.casing]} Names you type, your fields and ops, and Ledger's keys stay as they are.`}
+      >
+        <Segmented
+          id={id("casing")}
+          label="Code style"
+          value={store.casing}
+          options={CASINGS}
+          onValue={(value) => set("casing", value)}
+        />
+      </Labelled>
       <Switch
         id={id("must-exist")}
         label="MustExist"

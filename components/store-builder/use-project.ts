@@ -4,7 +4,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { exampleProject } from "@/lib/store-builder/example";
-import type { Project } from "@/lib/store-builder/project";
+import { type Project, withDefaults } from "@/lib/store-builder/project";
 
 export type Update = (change: (draft: Project) => void) => void;
 
@@ -16,7 +16,10 @@ export function readSaved(): Saved | null {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null");
     if (saved?.project?.version === 2 && saved.workspace) {
-      return saved;
+      return {
+        project: withDefaults(saved.project),
+        workspace: saved.workspace,
+      };
     }
   } catch {}
   return null;

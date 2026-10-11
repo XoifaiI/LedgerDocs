@@ -103,6 +103,8 @@ export function generateStores(
   const generator = newGenerator(project);
   generator.init(workspace);
   const { store } = project;
+  // The module's own names, in the project's naming style.
+  const id = (name: string) => generator.id(name);
 
   const hatsOf = (type: string) =>
     workspace
@@ -138,7 +140,7 @@ export function generateStores(
   const moduleNames = [store.variable, store.dataType, store.opsType];
   generator.reserve(moduleNames);
   for (const path of arithmetics.keys()) {
-    const name = generator.local(requireLeaf(path));
+    const name = generator.distinct(requireLeaf(path));
     arithmetics.set(path, name);
     requires.push(`local ${name} = require(${path})`);
   }
@@ -243,8 +245,8 @@ export function generateStores(
         ? "-- In Studio, stores run on the Mock package, so testing never touches real data."
         : "-- Every store runs on the Mock package. Turn this off before you publish.",
       project.mock.studioOnly
-        ? `local FakeServices = if RunService:IsStudio() then ${made} else nil`
-        : `local FakeServices = ${made}`,
+        ? `local ${id("FakeServices")} = if RunService:IsStudio() then ${made} else nil`
+        : `local ${id("FakeServices")} = ${made}`,
     );
   }
 
@@ -257,7 +259,7 @@ export function generateStores(
     out.push(
       "",
       "-- Every op the reducer handles, by kind.",
-      `local HANDLERS: { [string]: (Data: ${store.dataType}, Op: any) -> ${store.dataType}? } = {`,
+      `local HANDLERS: { [string]: (${id("Data")}: ${store.dataType}, ${id("Op")}: any) -> ${store.dataType}? } = {`,
       ...ops.map(
         (op) =>
           `${T}${tableKey(op.getFieldValue("NAME"))} = ${generator.handlerNames.get(op.id)},`,
@@ -388,14 +390,14 @@ export function generateStores(
         breaking
           ? `${T}${T}${T}IsBreaking = true,`
           : `${T}${T}${T}Fields = ${table(added.map(luauString), 3, `${T}${T}${T}Fields = `)},`,
-        `${T}${T}${T}Run = function(Stored: unknown): unknown`,
-        `${T}${T}${T}${T}local New = table.clone(Stored :: Saved)`,
+        `${T}${T}${T}Run = function(${id("Stored")}: unknown): unknown`,
+        `${T}${T}${T}${T}local ${id("New")} = table.clone(${id("Stored")} :: Saved)`,
       ];
       if (body) {
         lines.push(generator.prefixLines(body, `${T}${T}${T}`).trimEnd());
       }
       lines.push(
-        `${T}${T}${T}${T}return New`,
+        `${T}${T}${T}${T}return ${id("New")}`,
         `${T}${T}${T}end,`,
         `${T}${T}},`,
       );
@@ -406,7 +408,7 @@ export function generateStores(
 
   if (checks.length) {
     const lines = [
-      `Schema = function(Data: ${store.dataType}): (boolean, string?)`,
+      `Schema = function(${id("Data")}: ${store.dataType}): (boolean, string?)`,
     ];
     if (checkBody) {
       lines.push(generator.prefixLines(checkBody, T).trimEnd(), "");
@@ -453,27 +455,28 @@ export function generateStores(
     if (players.warnOnLoadFailed) {
       config.push(
         [
-          "OnLoadFailed = function(Player: Player, Reason: Ledger.Reason)",
-          `${T}${T}warn("Couldn't load", Player.Name, Reason)`,
+          `OnLoadFailed = function(${id("Player")}: Player, ${id("Reason")}: Ledger.Reason)`,
+          `${T}${T}warn("Couldn't load", ${id("Player")}.Name, ${id("Reason")})`,
           `${T}end`,
         ].join("\n"),
       );
     }
   }
   if (project.mock.enabled) {
-    config.push("Mock = FakeServices");
+    config.push(`Mock = ${id("FakeServices")}`);
   }
 
   if (ops.length > 0) {
+    const [data, op, handler] = [id("Data"), id("Op"), id("Handler")];
     config.push(
       [
-        `Reducer = function(Data: ${store.dataType}, Op: Ledger.Op<${store.opsType}>): ${store.dataType}?`,
-        `${T}${T}local Handler = HANDLERS[Op.Kind]`,
-        `${T}${T}if not Handler then`,
+        `Reducer = function(${data}: ${store.dataType}, ${op}: Ledger.Op<${store.opsType}>): ${store.dataType}?`,
+        `${T}${T}local ${handler} = HANDLERS[${op}.Kind]`,
+        `${T}${T}if not ${handler} then`,
         `${T}${T}${T}return nil -- a kind this server doesn't know`,
         `${T}${T}end`,
         "",
-        `${T}${T}return Handler(Data, Op)`,
+        `${T}${T}return ${handler}(${data}, ${op})`,
         `${T}end`,
       ].join("\n"),
     );

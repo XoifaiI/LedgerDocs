@@ -1,5 +1,7 @@
 // What counts as a usable name in the generated Luau.
 
+import { type Casing, cased, LOCAL_NAMES } from "./casing";
+
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const LUAU_KEYWORDS = [
@@ -96,23 +98,24 @@ export const LUAU_TYPES = [
   "vector",
 ];
 
-// Names the generated module declares itself.
-export const MODULE_NAMES = [
-  "Data",
-  "FakeServices",
-  "Handler",
+// Names the generated module declares itself in every naming style: its types, constants,
+// services and requires.
+const FIXED_NAMES = [
   "HANDLERS",
   "Ledger",
   "Mock",
-  "New",
   "Op",
   "ReplicatedStorage",
   "RunService",
   "Saved",
   "ServerScriptService",
   "ServerStorage",
-  "Stored",
 ];
+
+// Every name the generated module declares itself, in this naming style.
+export function moduleNames(casing: Casing): string[] {
+  return [...FIXED_NAMES, ...LOCAL_NAMES.map((name) => cased(name, casing))];
+}
 
 export function isName(text: string): boolean {
   return IDENTIFIER.test(text) && !LUAU_KEYWORDS.includes(text);

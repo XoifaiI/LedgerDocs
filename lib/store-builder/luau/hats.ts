@@ -51,17 +51,19 @@ export function ledger_op(block: Block, generator: LuauGenerator): string {
   const ends = chainEnds(steps);
   const indent = generator.INDENT;
 
-  let code = `local function ${handler}(Data: ${dataType}, Op: Op<${luauString(kind)}>): ${dataType}?\n`;
+  const data = generator.id("Data");
+  const fresh = generator.id("New");
+  let code = `local function ${handler}(${data}: ${dataType}, ${generator.id("Op")}: Op<${luauString(kind)}>): ${dataType}?\n`;
   if (!ends || generator.usesNew) {
-    code += `${indent}local New = table.clone(Data)\n`;
+    code += `${indent}local ${fresh} = table.clone(${data})\n`;
     for (const name of writtenTables(block, generator)) {
-      const path = `New${accessor(name)}`;
+      const path = `${fresh}${accessor(name)}`;
       code += `${indent}${path} = table.clone(${path})\n`;
     }
   }
   code += body;
   if (!ends) {
-    code += `${indent}return New\n`;
+    code += `${indent}return ${fresh}\n`;
   }
   return `${code}end`;
 }
@@ -91,7 +93,7 @@ function opRead(block: Block, generator: LuauGenerator): [string, number] {
       Order.ATOMIC,
     ];
   }
-  return [`Op${accessor(name)}`, Order.HIGH];
+  return [`${generator.id("Op")}${accessor(name)}`, Order.HIGH];
 }
 
 export const ledger_op_number = opRead;
@@ -132,7 +134,7 @@ export function ledger_migrate_add(
   if (!field) {
     return "";
   }
-  return `New${accessor(field.name)} = ${defaultValue(field)}\n`;
+  return `${generator.id("New")}${accessor(field.name)} = ${defaultValue(field)}\n`;
 }
 
 function oldName(block: Block, generator: LuauGenerator): string | null {
@@ -157,7 +159,9 @@ export function ledger_migrate_rename(
     generator.problem(block, "The old and new names are the same.");
     return "";
   }
-  return `New${accessor(field.name)} = New${accessor(old)}\nNew${accessor(old)} = nil\n`;
+  const fresh = generator.id("New");
+  const from = `${fresh}${accessor(old)}`;
+  return `${fresh}${accessor(field.name)} = ${from}\n${from} = nil\n`;
 }
 
 export function ledger_migrate_remove(
@@ -165,7 +169,7 @@ export function ledger_migrate_remove(
   generator: LuauGenerator,
 ): string {
   const old = oldName(block, generator);
-  return old ? `New${accessor(old)} = nil\n` : "";
+  return old ? `${generator.id("New")}${accessor(old)} = nil\n` : "";
 }
 
 function migrateSet(
@@ -176,7 +180,9 @@ function migrateSet(
 ): string {
   const field = generator.field(block, [kind]);
   const value = generator.value(block, "VALUE", Order.NONE, type);
-  return field ? `New${accessor(field.name)} = ${value}\n` : "";
+  return field
+    ? `${generator.id("New")}${accessor(field.name)} = ${value}\n`
+    : "";
 }
 
 export function ledger_migrate_set_number(
@@ -210,7 +216,7 @@ function saved(
     generator.problem(block, "Name the old field.");
     return null;
   }
-  return { path: `New${accessor(name)}` };
+  return { path: `${generator.id("New")}${accessor(name)}` };
 }
 
 export function ledger_saved_number(

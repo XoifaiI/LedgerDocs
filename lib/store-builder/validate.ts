@@ -27,7 +27,7 @@ import {
   isRequirePath,
   LUAU_GLOBALS,
   LUAU_TYPES,
-  MODULE_NAMES,
+  moduleNames,
   nameProblem,
   utf8Bytes,
 } from "./luau-names";
@@ -116,16 +116,17 @@ export function validateProject(
     );
   }
 
-  const moduleNames: [string, string, string][] = [
+  const ownNames = moduleNames(store.casing);
+  const storeNames: [string, string, string][] = [
     [store.variable, "variable", "store variable"],
     [store.dataType, "data-type", "data type"],
     [store.opsType, "ops-type", "ops type"],
   ];
   const seenModuleNames = new Set<string>();
-  for (const [text, part, what] of moduleNames) {
+  for (const [text, part, what] of storeNames) {
     const problem =
       nameProblem(text, what) ??
-      (MODULE_NAMES.includes(text) ||
+      (ownNames.includes(text) ||
       LUAU_GLOBALS.includes(text) ||
       LUAU_TYPES.includes(text)
         ? `The module already uses ${text}. Pick another name.`

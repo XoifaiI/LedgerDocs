@@ -2,6 +2,8 @@
 // (ops, checks, migrations). Blocks point at data fields by uid, so renaming a field never breaks
 // them. Numbers stay as the text their inputs hold: "" means Ledger's default.
 
+import type { Casing } from "./casing";
+
 export type FieldType =
   | "number"
   | "string"
@@ -90,6 +92,8 @@ export type Project = {
     erasable: boolean;
     // Where the game keeps Ledger, like ReplicatedStorage.Ledger.
     ledgerPath: string;
+    // How the module names its own handlers and locals.
+    casing: Casing;
   };
   fields: DataField[];
   balances: Balance[];
@@ -182,6 +186,7 @@ export function emptyProject(): Project {
       mustExist: false,
       erasable: true,
       ledgerPath: "ReplicatedStorage.Ledger",
+      casing: "pascal",
     },
     fields: [],
     balances: [],
@@ -195,6 +200,19 @@ export function emptyProject(): Project {
       path: "ReplicatedStorage.Packages.Mock",
       players: "10",
     },
+  };
+}
+
+// A saved project with any setting added since it was saved filled in from the defaults.
+export function withDefaults(saved: Project): Project {
+  const empty = emptyProject();
+  return {
+    ...empty,
+    ...saved,
+    store: { ...empty.store, ...saved.store },
+    players: { ...empty.players, ...saved.players },
+    timing: { ...empty.timing, ...saved.timing },
+    mock: { ...empty.mock, ...saved.mock },
   };
 }
 

@@ -10,7 +10,8 @@ import {
   type HatType,
   ONLY_IN,
 } from "../blocks/contexts";
-import { LUAU_GLOBALS, LUAU_KEYWORDS, MODULE_NAMES } from "../luau-names";
+import { cased } from "../casing";
+import { LUAU_GLOBALS, LUAU_KEYWORDS, moduleNames } from "../luau-names";
 import type { BlockProblem } from "../problem";
 import {
   type DataField,
@@ -70,8 +71,17 @@ export class LuauGenerator extends Blockly.CodeGenerator {
     this.project = project;
     this.INDENT = "\t";
     this.addReservedWords(
-      [...LUAU_KEYWORDS, ...LUAU_GLOBALS, ...MODULE_NAMES].join(","),
+      [
+        ...LUAU_KEYWORDS,
+        ...LUAU_GLOBALS,
+        ...moduleNames(project.store.casing),
+      ].join(","),
     );
+  }
+
+  // One of the module's own names (Data, New, Op…) in the project's naming style.
+  id(name: string): string {
+    return cased(name, this.project.store.casing);
   }
 
   override init(_workspace: Blockly.Workspace): void {
@@ -92,8 +102,13 @@ export class LuauGenerator extends Blockly.CodeGenerator {
     this.usesNew = false;
   }
 
-  // A local's name, distinct from every other name in the hat.
+  // A local's name in the project's naming style, distinct from every other name in the hat.
   local(name: string): string {
+    return this.distinct(this.id(name));
+  }
+
+  // A name as given, made distinct; for required modules, which keep their own casing.
+  distinct(name: string): string {
     if (!this.nameDB_) {
       throw new Error("LuauGenerator.init was never called");
     }
@@ -144,10 +159,10 @@ export class LuauGenerator extends Blockly.CodeGenerator {
   // The table a block reads and writes: Data in checks, New in ops and migrations.
   base(block: Block): string {
     if (block.getRootBlock().type === CHECK_HAT) {
-      return "Data";
+      return this.id("Data");
     }
     this.usesNew = true;
-    return "New";
+    return this.id("New");
   }
 
   // Where a field lives, like New.Gold, or null after reporting why there's none.

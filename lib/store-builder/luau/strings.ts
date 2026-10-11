@@ -1,5 +1,7 @@
 // Luau literals and keys.
 
+import { words } from "../casing";
+
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function escapeChar(char: string): string {
@@ -57,8 +59,7 @@ export function luauNumber(value: number): string {
 
 // A field name as SCREAMING_CASE, for constants such as RECEIPTS_KEPT.
 export function screamingCase(name: string): string {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .toUpperCase();
+  return words(name)
+    .map((word) => word.toUpperCase())
+    .join("_");
 }
