@@ -1,0 +1,167 @@
+/* Blockly inside the store builder, restyled to match Fumadocs. */
+
+.ledger-builder .injectionDiv {
+  --blockly-active-node-color: var(--color-fd-primary);
+  --blockly-active-tree-color: var(--color-fd-ring);
+}
+
+/* Blockly hides scrollbars with the SVG display="none" attribute, and
+   Tailwind's svg { display: block } beats an attribute. */
+.ledger-builder svg[display="none"] {
+  display: none;
+}
+
+/* Blockly outlines the canvas in grey; the panel's edge is enough. */
+.ledger-builder .blocklyMainBackground {
+  stroke: none;
+}
+
+.ledger-builder .blocklyToolbox {
+  border-inline-end: 1px solid var(--color-fd-border);
+  padding: 0.5rem;
+  scrollbar-width: thin;
+}
+
+.ledger-builder .blocklyToolbox .blocklyToolboxCategoryGroup {
+  gap: 0.125rem;
+}
+
+.ledger-builder .blocklyToolbox .blocklyToolboxCategoryContainer {
+  margin: 0;
+}
+
+.ledger-builder .blocklyToolbox .blocklyToolboxCategory {
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border-radius: 0.5rem;
+  color: var(--color-fd-muted-foreground);
+  line-height: 1.25rem;
+  cursor: pointer;
+  transition:
+    background-color 100ms,
+    color 100ms;
+}
+
+.ledger-builder .blocklyToolbox .blocklyToolboxCategory:hover {
+  background-color: color-mix(
+    in oklab,
+    var(--color-fd-accent) 50%,
+    transparent
+  );
+  color: var(--color-fd-accent-foreground);
+}
+
+.ledger-builder .blocklyToolbox .blocklyToolboxCategory.blocklyToolboxSelected {
+  background-color: color-mix(
+    in oklab,
+    var(--color-fd-primary) 10%,
+    transparent
+  );
+  color: var(--color-fd-primary);
+}
+
+.ledger-builder .blocklyToolbox .blocklyTreeRowContentContainer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem 0.375rem 0.625rem;
+}
+
+/* The category's colour, set by DotCategory in lib/store-builder/register.ts. */
+.ledger-builder .blocklyToolbox .blocklyToolboxCategoryIcon {
+  visibility: visible;
+  flex-shrink: 0;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--category-colour, var(--color-fd-muted-foreground));
+}
+
+.ledger-builder .blocklyToolbox .blocklyToolboxCategoryLabel {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: inherit;
+}
+
+.ledger-builder .blocklyToolbox .blocklyTreeSeparator {
+  margin: 0.375rem 0.625rem;
+  border-bottom: 1px solid var(--color-fd-border);
+}
+
+/* Small headings between groups of blocks in a flyout. */
+/* The flyout is drawn at the canvas's zoom, so this is bigger than it looks. */
+.ledger-builder .blocklyFlyout .blocklyFlyoutLabelText {
+  fill: var(--color-fd-muted-foreground);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ledger-builder .blocklyFlyoutBackground {
+  stroke: var(--color-fd-border);
+  stroke-width: 1;
+}
+
+/* Menus and tooltips live on document.body, outside .ledger-builder. */
+.blocklyWidgetDiv .blocklyMenu {
+  padding: 0.25rem;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 0.75rem;
+  background: var(--color-fd-popover);
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.1),
+    0 4px 6px -4px rgb(0 0 0 / 0.1);
+  color: var(--color-fd-popover-foreground);
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.blocklyWidgetDiv .blocklyMenu:focus {
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.1),
+    0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+.blocklyWidgetDiv .blocklyMenuItem {
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.5rem;
+  color: inherit;
+}
+
+.blocklyWidgetDiv .blocklyMenuItemHighlight {
+  background-color: var(--color-fd-accent);
+  color: var(--color-fd-accent-foreground);
+}
+
+.blocklyWidgetDiv .blocklyMenuItemDisabled {
+  color: var(--color-fd-muted-foreground);
+  opacity: 0.6;
+}
+
+.blocklyWidgetDiv .blocklyMenuSeparator {
+  margin: 0.25rem;
+  background-color: var(--color-fd-border);
+}
+
+.blocklyWidgetDiv
+  .blocklyMenuItemContent
+  .blocklyShortcutContainer
+  .blocklyShortcut {
+  color: var(--color-fd-muted-foreground);
+}
+
+.blocklyTooltipDiv {
+  max-width: 20rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-fd-popover);
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  color: var(--color-fd-popover-foreground);
+  font: inherit;
+  font-size: 0.8125rem;
+  opacity: 1;
+}

@@ -12,6 +12,7 @@
     "format": "biome format --write"
   },
   "dependencies": {
+    "blockly": "13.3.0",
     "cnfast": "^0.2.0",
     "fumadocs-core": "^16.14.0",
     "fumadocs-mdx": "^15.2.1",
