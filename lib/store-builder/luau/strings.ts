@@ -1,8 +1,7 @@
 // Luau literals and keys.
 
 import { words } from "../casing";
-
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+import { isName } from "../luau-names";
 
 function escapeChar(char: string): string {
   switch (char) {
@@ -46,7 +45,7 @@ export function interpolatedText(text: string): string {
 
 // A table key: Name = ..., or ["Some name"] = ... when it isn't a plain name.
 export function tableKey(name: string): string {
-  return IDENTIFIER.test(name) ? name : `[${luauString(name)}]`;
+  return isName(name) ? name : `[${luauString(name)}]`;
 }
 
 // A whole number or finite decimal, written so Luau reads it back the same.

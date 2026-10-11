@@ -1,5 +1,6 @@
 // A field's starting value as Luau, for Default and for a migration that adds the field.
 
+import { isSnippet } from "../luau-syntax";
 import type { DataField } from "../project";
 import { luauNumber, luauString } from "./strings";
 
@@ -12,7 +13,10 @@ export function defaultValue(field: DataField): string {
     case "boolean":
       return field.def === "true" ? "true" : "false";
     case "luau":
-      return field.def.trim() || "nil";
+      // One that wouldn't parse is reported, and stands as nil so the module still does.
+      return isSnippet(field.def, "expression")
+        ? field.def.trim()
+        : "nil :: any";
     default:
       return "{}";
   }

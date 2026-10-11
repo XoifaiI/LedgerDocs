@@ -7,7 +7,7 @@ import { enclosingOp, NOTHING_PICKED, paramsOf } from "../fields/ledger-field";
 import { fieldByUid } from "../project";
 import { defaultValue } from "./defaults";
 import { chainEnds } from "./flow";
-import { accessor, type LuauGenerator } from "./generator";
+import { accessor, firstNamed, type LuauGenerator } from "./generator";
 import { Order } from "./order";
 import { refusalTest } from "./refusal";
 import { luauString } from "./strings";
@@ -24,13 +24,26 @@ const ALL_KINDS = [
   "luau",
 ] as const;
 
+// Whether code reads a local, ignoring plain strings that happen to hold its name.
+function mentions(code: string, name: string): boolean {
+  const withoutStrings = code.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  return new RegExp(`(^|[^\\w.])${name}\\b`).test(withoutStrings);
+}
+
+const TABLE_TYPES = ["counts", "set", "list"];
+
 // The table fields an op writes, so its handler clones them before changing them.
 function writtenTables(op: Block, generator: LuauGenerator): string[] {
   const names = new Set<string>();
   for (const block of op.getDescendants(false)) {
     if (TABLE_WRITES.includes(block.type) && block.isEnabled()) {
       const field = fieldByUid(generator.project, block.getFieldValue("FIELD"));
-      if (field) {
+      // A table write pointed at a field that isn't a table is reported and writes nothing.
+      if (
+        field &&
+        TABLE_TYPES.includes(field.type) &&
+        firstNamed(generator.project, field.name) === field
+      ) {
         names.add(field.name);
       }
     }
@@ -54,7 +67,7 @@ export function ledger_op(block: Block, generator: LuauGenerator): string {
   const data = generator.id("Data");
   const fresh = generator.id("New");
   let code = `local function ${handler}(${data}: ${dataType}, ${generator.id("Op")}: Op<${luauString(kind)}>): ${dataType}?\n`;
-  if (!ends || generator.usesNew) {
+  if (!ends || mentions(body, fresh)) {
     code += `${indent}local ${fresh} = table.clone(${data})\n`;
     for (const name of writtenTables(block, generator)) {
       const path = `${fresh}${accessor(name)}`;

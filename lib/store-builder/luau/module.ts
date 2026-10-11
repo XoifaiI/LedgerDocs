@@ -10,7 +10,8 @@ import {
   OP_HAT,
 } from "../blocks/contexts";
 import { paramsOf } from "../fields/ledger-field";
-import { requireLeaf, requireRoot } from "../luau-names";
+import { isName, requireLeaf, requireRoot } from "../luau-names";
+import { isSnippet } from "../luau-syntax";
 import type { BlockProblem, Problem } from "../problem";
 import {
   type Balance,
@@ -27,6 +28,7 @@ import { defaultValue } from "./defaults";
 import { LuauGenerator } from "./generator";
 import * as hats from "./hats";
 import { blockProblems, migrationIndex } from "./problems";
+import { startupProblems } from "./startup";
 import { luauNumber, luauString, tableKey } from "./strings";
 import * as values from "./values";
 
@@ -39,10 +41,8 @@ const T = "\t";
 // Past this, a table is written one entry per line.
 const LINE_MOST = 100;
 
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
 function typeKey(name: string): string {
-  return IDENTIFIER.test(name) ? name : `[${luauString(name)}]`;
+  return isName(name) ? name : `[${luauString(name)}]`;
 }
 
 // "{ A = 1, B = 2 }" when it fits on the line, otherwise one entry per line.
@@ -64,6 +64,11 @@ function lines(entries: string[], depth: number): string {
   return `{\n${entries.map((entry) => `${inner}${entry},`).join("\n")}\n${T.repeat(depth)}}`;
 }
 
+// A custom Arithmetic's Min or Max, or nil when it wouldn't parse (it's reported).
+function customLimit(text: string): string {
+  return isSnippet(text, "expression") ? text.trim() : "nil :: any";
+}
+
 function wholeOr(text: string, fallback: number): string {
   return String(parseWhole(text) ?? fallback);
 }
@@ -76,7 +81,7 @@ function newGenerator(project: Project): LuauGenerator {
 
 function kindEntry(kind: BalanceKind, balance: Balance): string {
   const limit = (text: string) =>
-    balance.arithmetic === "" ? wholeOr(text, 0) : text.trim();
+    balance.arithmetic === "" ? wholeOr(text, 0) : customLimit(text);
   const limits: string[] = [];
   if (kind.min.trim() !== "") {
     limits.push(`Min = ${limit(kind.min)}`);
@@ -293,7 +298,7 @@ export function generateStores(
       parts.push(`Debit = ${kindList(balance.debit, balance)}`);
     }
     const limit = (text: string) =>
-      balance.arithmetic === "" ? wholeOr(text, 0) : text.trim();
+      balance.arithmetic === "" ? wholeOr(text, 0) : customLimit(text);
     if (balance.min.trim() !== "") {
       parts.push(`Min = ${limit(balance.min)}`);
     }
@@ -449,7 +454,8 @@ export function generateStores(
     if (!players.kick) {
       config.push("Kick = false");
     }
-    if (players.kickMessage.trim() !== "") {
+    // The message is only shown by a kick.
+    if (players.kick && players.kickMessage.trim() !== "") {
       config.push(`KickMessage = ${luauString(players.kickMessage)}`);
     }
     if (players.warnOnLoadFailed) {
@@ -496,7 +502,11 @@ export function generateStores(
   const opKinds = allOps.map((op) => op.getFieldValue("NAME") as string);
   const problems: Problem[] = [
     ...validateProject(project, { opKinds }),
-    ...dedupe([...blockProblems(workspace, project), ...generator.problems]),
+    ...dedupe([
+      ...blockProblems(workspace, project),
+      ...generator.problems,
+      ...startupProblems(checks, project),
+    ]),
   ];
   return { code: `${out.join("\n")}\n`, problems };
 }

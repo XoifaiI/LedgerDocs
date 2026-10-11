@@ -31,6 +31,7 @@ import {
   nameProblem,
   utf8Bytes,
 } from "./luau-names";
+import { snippetProblem } from "./luau-syntax";
 import type { SectionId, SettingProblem } from "./problem";
 import { settingId } from "./problem";
 import { balanceKinds, fieldByUid, type Project } from "./project";
@@ -184,19 +185,19 @@ export function validateProject(
       }
     }
     if (field.type === "luau") {
-      if (field.luauType.trim() === "") {
-        add(
-          "data",
-          settingId.field(field.uid, "luau-type"),
-          "Give it a Luau type.",
-        );
+      const typeProblem =
+        field.luauType.trim() === ""
+          ? "Give it a Luau type."
+          : snippetProblem(field.luauType, "type");
+      if (typeProblem) {
+        add("data", settingId.field(field.uid, "luau-type"), typeProblem);
       }
-      if (field.def.trim() === "") {
-        add(
-          "data",
-          settingId.field(field.uid, "default"),
-          "Give it a Luau expression to start from.",
-        );
+      const startProblem =
+        field.def.trim() === ""
+          ? "Give it a Luau expression to start from."
+          : snippetProblem(field.def, "expression");
+      if (startProblem) {
+        add("data", settingId.field(field.uid, "default"), startProblem);
       }
     }
   }
@@ -248,10 +249,17 @@ export function validateProject(
     }
 
     // Whole-number limits. A custom Arithmetic takes Luau expressions instead.
-    const limit = (text: string, target: string): number | null =>
-      balance.arithmetic === ""
-        ? whole("balances", target, text, -WHOLE_MOST, WHOLE_MOST, true)
-        : null;
+    const limit = (text: string, target: string): number | null => {
+      if (balance.arithmetic === "") {
+        return whole("balances", target, text, -WHOLE_MOST, WHOLE_MOST, true);
+      }
+      const problem =
+        text.trim() === "" ? null : snippetProblem(text, "expression");
+      if (problem) {
+        add("balances", target, problem);
+      }
+      return null;
+    };
     const fieldMin = limit(balance.min, settingId.balance(balance.uid, "min"));
     const fieldMax = limit(balance.max, settingId.balance(balance.uid, "max"));
     if (fieldMin !== null && fieldMax !== null && fieldMin > fieldMax) {

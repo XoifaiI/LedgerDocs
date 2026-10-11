@@ -151,7 +151,8 @@ const REQUIRE_PATH = new RegExp(
 );
 
 export function isRequirePath(text: string): boolean {
-  return REQUIRE_PATH.test(text);
+  // Each part is read as .Name, so a keyword like end can't be one.
+  return REQUIRE_PATH.test(text) && text.split(".").every(isName);
 }
 
 export function requireRoot(path: string): string {

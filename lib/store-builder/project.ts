@@ -3,6 +3,7 @@
 // them. Numbers stay as the text their inputs hold: "" means Ledger's default.
 
 import type { Casing } from "./casing";
+import { isSnippet } from "./luau-syntax";
 
 export type FieldType =
   | "number"
@@ -155,7 +156,11 @@ export const FIELD_TYPES: Record<
 };
 
 export function luauTypeOf(field: DataField): string {
-  return field.type === "luau" ? field.luauType : FIELD_TYPES[field.type].luau;
+  if (field.type !== "luau") {
+    return FIELD_TYPES[field.type].luau;
+  }
+  // A type that wouldn't parse is reported, and stands as any so the module still does.
+  return isSnippet(field.luauType, "type") ? field.luauType.trim() : "any";
 }
 
 export function makeUid(): string {

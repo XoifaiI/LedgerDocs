@@ -11,7 +11,12 @@ import {
   ONLY_IN,
 } from "../blocks/contexts";
 import { cased } from "../casing";
-import { LUAU_GLOBALS, LUAU_KEYWORDS, moduleNames } from "../luau-names";
+import {
+  isName,
+  LUAU_GLOBALS,
+  LUAU_KEYWORDS,
+  moduleNames,
+} from "../luau-names";
 import type { BlockProblem } from "../problem";
 import {
   type DataField,
@@ -35,8 +40,6 @@ const FALLBACK: Record<ValueType, string> = {
   Boolean: "false",
 };
 
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
 function misplaced(block: Block): boolean {
   const places = ONLY_IN[block.type];
   const root = block.getRootBlock().type;
@@ -47,9 +50,17 @@ function misplaced(block: Block): boolean {
   );
 }
 
+// The field the data type uses for a name: the first one, when two share it.
+export function firstNamed(
+  project: Project,
+  name: string,
+): DataField | undefined {
+  return project.fields.find((field) => field.name === name);
+}
+
 // .Name, or ["Some name"] when it isn't a plain name.
 export function accessor(name: string): string {
-  return IDENTIFIER.test(name) ? `.${name}` : `[${luauString(name)}]`;
+  return isName(name) ? `.${name}` : `[${luauString(name)}]`;
 }
 
 // The names a for each gives its body. "_" for one the body never reads.
@@ -63,8 +74,6 @@ export class LuauGenerator extends Blockly.CodeGenerator {
   // Each op block's handler name, given out before any body is made.
   readonly handlerNames = new Map<string, string>();
   readonly loops = new Map<string, LoopNames>();
-  // Whether the hat being made touched New, so it needs the clone.
-  usesNew = false;
 
   constructor(project: Project) {
     super("Luau");
@@ -99,7 +108,6 @@ export class LuauGenerator extends Blockly.CodeGenerator {
   startHat(): void {
     this.nameDB_ = new Blockly.Names(this.RESERVED_WORDS_);
     this.loops.clear();
-    this.usesNew = false;
   }
 
   // A local's name in the project's naming style, distinct from every other name in the hat.
@@ -146,6 +154,11 @@ export class LuauGenerator extends Blockly.CodeGenerator {
       );
       return null;
     }
+    // With two fields of one name, only the first is in the data type.
+    if (firstNamed(this.project, field.name) !== field) {
+      this.problem(block, `Two fields are called ${field.name}. Rename one.`);
+      return null;
+    }
     if (!kinds.includes(field.type)) {
       this.problem(
         block,
@@ -161,7 +174,6 @@ export class LuauGenerator extends Blockly.CodeGenerator {
     if (block.getRootBlock().type === CHECK_HAT) {
       return this.id("Data");
     }
-    this.usesNew = true;
     return this.id("New");
   }
 

@@ -211,16 +211,15 @@ function CanvasView({
       );
       workspace.addChangeListener(Blockly.Events.disableOrphans);
 
-      let loaded = false;
+      // Saved blocks this build can't read (say, from an older one) leave an empty canvas
+      // rather than the example's blocks, which would point at fields the saved store lacks.
       if (saved) {
         try {
           Blockly.serialization.workspaces.load(saved, workspace);
-          loaded = true;
         } catch {
           workspace.clear();
         }
-      }
-      if (!loaded) {
+      } else {
         loadExample(workspace);
       }
 
