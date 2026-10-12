@@ -94,7 +94,7 @@ The total must be declared in `Totals`. `Amount` is a whole number and may be ne
 | `Total(Name, MaxAge?)` | A declared total. |
 | `Follow(Key)` | An [observer](/docs/reference/observers) of the key's data. |
 | `Stale()` | An observer of keys this server wrote that its view is behind on. |
-| `Keys()` | Pages of every key. |
+| `Keys(Prefix?)` | Pages of every key, or of the keys that start with `Prefix`. |
 
 ### Peek
 
@@ -130,6 +130,8 @@ local Page, Why = Pages:Next()
 
 `Next` answers a list of up to 50 keys. `nil, nil` means the last page was read. `nil, Unresolved` means the fetch failed; the next `Next` tries the same page. Pages come in no set order.
 
+Give a `Prefix` to list only the keys that start with it, such as `Guilds:Keys("guild:")`. It's for string stores; a player store throws.
+
 ## Support calls
 
 | Call | What it does |
@@ -138,8 +140,44 @@ local Page, Why = Pages:Next()
 | `Losses(Key)` | The balances that a Reset or Erase erased, kept for 7 days. |
 | `Pending(Key)` | Trade work that is not finished on a key. |
 | `Resettle(Key)` | Finishes that work now. Takes no options. |
+| `Versions(Key)` | Pages of the versions Roblox kept of the key. |
+| `PeekVersion(Key, Version)` | The key's data as one of those versions saved it. |
 
 See [Support tools](/docs/guides/support-tools). `Pending` answers `Unresolved` after 30 s on a hung read, as `Peek` does.
+
+### Versions
+
+```luau
+local Pages = Bank:Versions(Key)
+local Page, Why = Pages:Next()
+```
+
+`Next` answers a list of up to 1,024 versions, oldest first, and the same `nil` answers as `Keys`.
+
+| Field | What it is |
+| --- | --- |
+| `Version` | Roblox's id for the version. |
+| `CreatedTime` | When it was made, in milliseconds since 1970. Not a `Ledger.Now()` time. |
+| `IsDeleted` | `true` for the tombstone Roblox keeps when Ledger removes an erased key, a while after the `Erase`. Before that, the newest version is the erase's seal, which `PeekVersion` answers `Missing`. |
+
+Roblox keeps one version for each hour the key was written, for 30 days. Ledger's own saves count too, so it isn't a list of your ops.
+
+### PeekVersion
+
+```luau
+local State, Why = Bank:PeekVersion(Key, Version)
+```
+
+Reads one version: the key's data exactly as it was saved then. Migrations added since don't run on it, so it can be in an older shape than your `Default`. A trade still unfinished when the version was saved isn't in it. It never changes the key: to put old data back, send it as an op or a `Reset`.
+
+| Answer | Means |
+| --- | --- |
+| the data | The key's data as that version saved it. |
+| `nil, Missing` | No such version, or the key was erased then. |
+| `nil, Behind` | A newer version of Ledger saved it. |
+| `nil, Unreadable` | Ledger didn't write it. |
+| `nil, Unresolved` | The read failed. Try again. |
+| `nil, Closed` | The server is shutting down. |
 
 ## Quantities
 

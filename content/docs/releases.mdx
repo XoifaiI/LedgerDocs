@@ -5,6 +5,14 @@ description: What changed from v6, and what you have to change with it.
 
 `+` is new in v7, `~` exists in v6 and works differently now, `-` is gone, `!` is something to know before you upgrade.
 
+## 7.0.2
+
+```diff
++ Store:Keys(Prefix) lists only the keys that start with Prefix, on a string store
++ Store:Versions(Key) lists the versions Roblox kept of a key
++ Store:PeekVersion(Key, Version) reads one of those versions, as it was saved
+```
+
 ## 7.0.1
 
 ```diff

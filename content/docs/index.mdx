@@ -31,8 +31,8 @@ end
 ## What it isn't for
 
 - **Client scripts.** Ledger runs on the server. Calling it from a client throws.
-- **Searching.** You can't search your data. `Store:Keys()` lists every key, a page at a time.
-- **History.** You can't read an older version of a player's data.
+- **Searching.** You can't search your data. `Store:Keys()` lists every key, or the keys that start with a prefix, a page at a time.
+- **History.** Ledger keeps no log of what changed. Roblox keeps a version of a player's data for each hour it was written, for 30 days: `Store:Versions(Key)` lists them and `Store:PeekVersion(Key, Version)` reads one.
 
 ## Where to start
 
