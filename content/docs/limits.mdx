@@ -87,6 +87,7 @@ A key remembers the names of recent ops, so a resend does nothing twice.
 | `Peek` `MaxAge` | 0 to 30 days. An answer can be up to about 4.5 minutes behind on a key nobody writes. |
 | `Follow` | Checks every 30 s, slowing to 240 s on a quiet key. Copies last 1 hour. |
 | `Store:Keys()` page | 50 keys. Pages are in no set order. |
+| `Store:Versions()` page | 1,024 versions, oldest first. Roblox keeps one per hour of writes, for 30 days. |
 | `Cut.Losses`, `Store:Losses` | Kept 7 days. |
 
 ## Requests per call
@@ -106,6 +107,8 @@ How many Roblox DataStore requests a call makes, with no contention. `read` is a
 | `Reset`, `Erase` | 1 write. `Erase` also removes the key. |
 | `Open`, `Close` | One write per part. |
 | `Bump` | One write per shard per server batch. |
+| `Keys`, `Versions` | 1 list request per page. |
+| `PeekVersion` | 1 read. |
 | Server start | 1 write. |
 
 Next: [Releases](/docs/releases)

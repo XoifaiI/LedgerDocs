@@ -37,7 +37,7 @@ All types are `Ledger.<Name>`, for example `Ledger.Info<Data>`. Luau checks them
 | `OpOf<O, "Kind">` | One kind of op. A wrong field is named in the error. |
 | `Reducer<D, O>` | A reducer function. |
 | `TypedStore<D, O>`, `TypedSession<D, O>` | The store and session objects. |
-| `Quantity`, `KeyPages<K>` | The quantity and key-pager objects. |
+| `Quantity`, `KeyPages<K>`, `VersionPages` | The quantity, key-pager and version-pager objects. |
 | `Observer<T>`, `Connection`, `Future<T...>` | See [Observers](/docs/reference/observers). |
 | `Cut` | The answer of `Reset` and `Erase`: `{ Name, Losses? }`. |
 | `Closed` | The answer of `Quantity:Close`: `{ Removed, Left, Missing }`. |
@@ -48,7 +48,7 @@ All types are `Ledger.<Name>`, for example `Ledger.Info<Data>`. Luau checks them
 
 ## Everything else
 
-`KeyLike`, `KeysMode`, `OpMap`, `Name`, `OpId`, `Applied`, `Terms<O>`, `Overloads<O, Shape>`, `Fate<O>`, `DidApplyInfo`, `InfoKey`, `Identity`, `Record<D>`, `LossRecords`, `PendingItems`, `ShortReason`, `LoadFailedHandler`, `ResultSchema<D>`, `Migration`, `BalanceField<T>`, `BalanceKindLimits<T>`, `Amount`, `Arithmetic<T>`, `Windows`, `TotalDeclaration`, `QuantityDeclaration`, `KeyOfStore`, `TxLeg`, `Leg<S>`, `TakeLeg`, `SessionCommon<D, O>`, `Session<D>`, `StoreCommon<D>`, `Store<D>`, `Config<D>`.
+`KeyLike`, `KeysMode`, `OpMap`, `Name`, `OpId`, `Applied`, `Terms<O>`, `Overloads<O, Shape>`, `Fate<O>`, `DidApplyInfo`, `InfoKey`, `Identity`, `Record<D>`, `LossRecords`, `PendingItems`, `KeyVersion`, `ShortReason`, `LoadFailedHandler`, `ResultSchema<D>`, `Migration`, `BalanceField<T>`, `BalanceKindLimits<T>`, `Amount`, `Arithmetic<T>`, `Windows`, `TotalDeclaration`, `QuantityDeclaration`, `KeyOfStore`, `TxLeg`, `Leg<S>`, `TakeLeg`, `SessionCommon<D, O>`, `Session<D>`, `StoreCommon<D>`, `Store<D>`, `Config<D>`.
 
 `Ledger.Took`, `Ledger.QuantityTotal` and `Ledger.HoldHandle` name the results of `Take`, `Quantity:Total` and `Hold`, so you can type a variable that keeps one (a checkout that holds a hold between two clicks, for example).
 

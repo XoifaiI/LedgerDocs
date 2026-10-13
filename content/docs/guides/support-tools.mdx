@@ -79,6 +79,44 @@ local function ShowLosses(UserId: number)
 end
 ```
 
+## A player's data over time
+
+```luau
+local HttpService = game:GetService("HttpService")
+
+-- Prints each version of a player's data Roblox kept, over the last 30 days.
+local function DataOverTime(UserId: number)
+	local Pages = PlayerStore:Versions(UserId)
+
+	while true do
+		local Page, Why = Pages:Next()
+		if not Page then
+			if Why then
+				warn("Couldn't list them all:", Why)
+			end
+
+			return
+		end
+
+		for _, Version in Page do
+			local At = DateTime.fromUnixTimestampMillis(Version.CreatedTime):ToIsoDate()
+			local Data, ReadWhy = PlayerStore:PeekVersion(UserId, Version.Version)
+			if Data then
+				print(At, HttpService:JSONEncode(Data))
+			else
+				print(At, ReadWhy)
+			end
+
+			task.wait(SECONDS_BETWEEN_READS)
+		end
+	end
+end
+```
+
+Roblox keeps a version of the data for each hour it was written, for 30 days. `Versions` lists them, oldest first, and `PeekVersion` reads one exactly as it was saved, before any migration you added since. Ledger's own saves count too, so the versions show what the data was, not what the player did. An erased version answers `Missing`.
+
+Each `PeekVersion` is a DataStore read, so pace them as below. To put old data back, make it a fix like the one below. Never write a version back yourself.
+
 ## Fixing a player's data
 
 Make the fix an op like any other, and give each support ticket an id. The reducer remembers the last 100 tickets and refuses one it has seen, so a fix can't apply twice, even if you send it twice by accident:
@@ -143,6 +181,8 @@ end
 ```
 
 `Keys` lists every key in the store, a page at a time. `Next` gives a page, then `nil` after the last one. Keys come in no set order, and one made while you're going through might be missed.
+
+In a string store, `Keys(Prefix)` lists only the keys that start with `Prefix`, like `Guilds:Keys("guild:")`.
 
 This reads every player's data once. Each server only gets about 60 DataStore reads a minute, plus 40 per player in it, and your game needs those too. One read a second leaves plenty to spare, but it takes a while on a big game: about a day per 80,000 players. Run it on one server, not every server.
 
