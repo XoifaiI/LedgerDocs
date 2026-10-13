@@ -1,0 +1,19 @@
+{
+  "title": "Making datastores that can't lose or dupe data",
+  "description": "How most games save data, why session locking isn't the answer, and how Ledger sends changes instead.",
+  "root": true,
+  "pages": [
+    "introduction",
+    "every-change-happens-once",
+    "every-change-gets-an-answer",
+    "forgetting-safely",
+    "trades",
+    "erasing-and-resetting",
+    "totals-and-hot-keys",
+    "shutting-down",
+    "why-it-isnt-300-lines",
+    "what-about-other-datastores",
+    "putting-it-together",
+    "how-it-was-checked"
+  ]
+}

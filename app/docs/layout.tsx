@@ -40,6 +40,8 @@ export default function Layout({ children }: LayoutProps<"/docs">) {
   return (
     <DocsLayout
       tree={{ ...tree, children: withBadge(tree.children, versions) }}
+      // each blog series is a root folder, but it's reached from /blog rather than a tab switcher
+      tabs={false}
       {...baseOptions()}
     >
       {children}

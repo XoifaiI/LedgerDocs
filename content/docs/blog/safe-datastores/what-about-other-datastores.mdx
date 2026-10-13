@@ -1,0 +1,102 @@
+---
+title: What about other datastores
+description: If these problems are this hard, why aren't more games broken? And what happened to the other libraries that tried going lockless.
+---
+
+If all of this is as hard as the last page says, it's fair to ask why every game isn't losing data all the time. Most
+games use some datastore module, a lot of them have been around for years, and they seem fine.
+
+## Session locking hides most of it
+
+Most games use a session locking module. One server owns a player's key while they're in it, saves the whole table, and
+gives it up when they leave. That sidesteps a lot of this series straight away. Only one server writes the key, so
+nothing's racing it, and saving the whole table twice is harmless since it's the same table both times.
+
+What it doesn't fix is anything that touches two keys. Trades, gifts, mail, a marketplace, anything that takes from one
+player and gives to another. Session locking can't make two keys change together, so every game does that part itself,
+usually with two saves in a row. That's exactly the "just doing both" from the trades page, and it's where most dupes
+come from.
+
+## They're rare, until they aren't
+
+The other reason is that most of these bugs need something unlucky to happen. A write that errors after it already went
+through doesn't happen often. When Roblox's servers are fine, almost never. But it does happen, and it happens in
+bursts, when the datastore service has a bad few minutes. Those are exactly the minutes when every server's retrying at
+once.
+
+A small game might go years without hitting one. A big game hits them every week. One big game
+[wrote about it](https://codermitchell.com/writing/datastore-write-correctness): their mailbox trusted that an error
+meant the write hadn't happened, and they found hundreds of thousands of duplicated pets before they worked out why.
+
+## Nobody can see them
+
+And when it does happen, nothing tells you. A dupe doesn't throw an error. The game thinks it worked, the player's
+happy, and the extra item just sits in someone's inventory. Most of the time it gets blamed on an exploiter, or nobody
+notices at all. You only find out if you go looking, by counting items that should be unique, or tracing where they
+came from.
+
+## Going lockless
+
+Some libraries have tried dropping session locks, the same as Ledger. It's the right idea, but it's also where all of
+this gets harder, since now any server can write any key. Two of them are worth looking at, because they ran into
+exactly the problems from this series.
+
+### drop
+
+[drop](https://github.com/jackhexed/drop) is about 1,200 lines. Its updates are pure functions sent with `UpdateAsync`,
+like the intro to this series, and it has transactions with a separate deciding key per transaction, like the
+two-phase commit on the trades page.
+
+The trouble is that it trusts errors. When an `UpdateAsync` fails, drop just runs it again:
+
+```luau
+local success, result, info = pcall(UpdateAsync, datastore, key, transform)
+if success then
+	return true, result, info
+end
+
+-- the first attempt failed, so try once more
+local success, result, info = pcall(UpdateAsync, datastore, key, transform)
+```
+
+There's no id on the change, so if the first attempt actually went through, the second applies it again. That's the
+retry from "Every change happens once". Its own example of giving a player 1,000 coins for a developer product can
+give them 2,000.
+
+Its transactions have the same problem on the deciding key. If marking the transaction as committed errors, the server
+treats it as aborted and starts undoing every key. But that write might have gone through. Then any key the undo didn't
+reach gets finished as committed by the next server that checks the deciding key. Some keys get rolled back and some
+go through, which is a dupe or a lost item. And the deciding key gets removed once enough servers say they're done with
+it, but that count isn't protected by an id either, so a retried count can remove it before every key's been settled.
+
+### skilift
+
+[skilift](https://github.com/alicesaidhi/skilift) is about 1,400 lines. It doesn't use session locks either, and it
+has transactions too. It keeps a list of pending transactions on each key, and a transaction counts as finished once
+its own key says "finished".
+
+The catch is how it checks that. It reads the transaction's key with `GetAsync`, and if the key isn't there yet, it
+decides the transaction failed and remembers that for 90 minutes:
+
+```luau
+local result = TRANSACTION_STORE:GetAsync(id)
+set_transaction_status(id, if result then true else false)
+```
+
+So if another server loads one of the players before the transaction's server has written "finished", or just gets an
+old read from `GetAsync`, it undoes that player's side. The other player's side still goes through. That's the read
+that nothing checks, from the trades page, and it splits the trade in half. And writing "finished" itself is a single
+`SetAsync`, which can error and still land.
+
+Skilift's own readme now says it's no longer maintained, because of "design issues which cannot be remedied", and that
+session locks are "more practical to work with".
+
+## So what does that mean
+
+None of this is because the people who wrote these were careless. Both libraries are clean, they're small, and the
+ideas behind them are right. That's kind of the point. Each one handled the cases you'd think of, and the bugs are all in
+the ones you wouldn't: an error that wasn't really an error, a read that was a bit old, a retry that landed twice.
+
+That's the whole reason Ledger went the way it did. Not because writing a lockless datastore is impossible, but because
+the only way to be sure it's right is to check every order things can happen in, and that's what the last page of this
+series is about.
