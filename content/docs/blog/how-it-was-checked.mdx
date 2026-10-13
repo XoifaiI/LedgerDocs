@@ -1,0 +1,75 @@
+---
+title: How it was checked
+description: Writing every part as a TLA+ spec first, making sure every check can fail, and some of the stranger bugs found along the way.
+---
+
+A lot of the bugs in this series only happen when things go wrong in a very specific order. A write errors after it went
+through, then a retry gets stuck, then another server touches the key, then the first write's retry lands. You can't
+test your way into finding those. There are too many orders, and the bad one might need a hundred things to line up.
+
+## TLA+
+
+So before any of Ledger's code was written, every part of it was written as a TLA+ spec first. TLA+ is a language for
+describing a system as states and the steps that move between them. You don't run it like a program. A model checker
+called TLC goes through every possible order of every step in a small version of the system, and tells you if any of
+them breaks a rule you've said must always hold.
+
+The model of Roblox itself was built first, and it's the nasty part. It includes everything the platform doesn't
+promise:
+
+- Writes that land and lose their reply.
+- Writes that land late, after the server that sent them is gone.
+- Transforms that run again after their call already answered.
+- Reads that give back old data.
+- Clocks that are off from each other.
+- Servers that crash between any two steps.
+- MemoryStore losing things whenever it feels like it.
+
+Then each part of Ledger was written against that, with rules like "an op never happens twice", "money's never made",
+and "every answer's true". TLC tried every order. One of the platform checks alone went through about 16 million
+states.
+
+## Making sure the checks can fail
+
+A check that never fails might just not be looking. So every fix in the design has a second version of the model with
+that fix taken out, and TLC has to find the bug when it's gone. If taking a fix out doesn't break anything, the fix
+wasn't needed and it got removed.
+
+That's also how a lot of the old design disappeared: the op log, compaction, the reaper. Nothing needed them once the
+specs were right.
+
+## Some of the stranger bugs
+
+Most bugs are the kind you'd expect, but a few were strange enough to be worth telling.
+
+**A retry that could never work.** Back on the trades page, every trade carries a fingerprint of its terms, so a retry
+with the same id but different terms gets refused instead of treated as the same trade. To make that fingerprint, the
+old version turned the terms into text. But if one of the terms was a buffer, it got printed as its address in memory,
+something like `buffer: 0x7f3a...`. So when a trade errored and the game sent it again with exactly the same terms, the
+buffer had a new address, the text came out different, and the retry got refused as a different trade. A trade with a
+buffer in it could never be retried.
+
+**`1` and `"1"` were the same thing.** The same code printed `{[1] = "a"}` and `{["1"] = "a"}` as exactly the same
+text. One has the number 1 as a key and the other has the string "1", so they're different tables. But they got the
+same fingerprint, so a retry with different terms could be told "done" for terms that never happened.
+
+**Roblox swallows your errors.** If the function you give `UpdateAsync` throws an error, Roblox doesn't give you the
+error back. It just returns nothing, the same as if your function had returned nil on purpose. So if there's a bug in
+your update function, it doesn't look like a bug, it looks like "nothing to change". Ledger now sets a flag going into
+its function and checks it after the call, so a throw inside still shows up as an error.
+
+**A remove that deleted data from the future.** From the erase page: `RemoveAsync` can error and still land later. If
+the player rejoins and their key gets made again in between, the late remove lands on the new key and deletes it, and
+the player loses everything they did since rejoining. That's why erasing uses a seal first.
+
+**60 gold isn't enough for 50.** A buy with two steps held 50 gold on the first step, like the holds on the trades page.
+Then the second step checked if the player could afford 50, but it counted the 50 the first step had just held as
+already spent. So a player with 60 gold buying something for 50 got told they couldn't afford it. It was competing with
+itself.
+
+**Part 1 and part 12 were the same thing.** One bit of bookkeeping made a text key by sticking a part number and a time
+together, with nothing in between. So part `1` at time `23889600` and part `12` at time `3889600` both came out as
+`123889600`, and two different things got mixed up. The fix was one character, a `:` between them.
+
+None of those would have shown up in testing. They each needed a very specific order of things to go wrong, which is
+exactly what the specs and the reviews look for.

@@ -1,0 +1,90 @@
+---
+title: Forgetting safely
+description: Why trimming old ids lets late retries dupe, and how a horizon keeps the list small without forgetting anything that matters.
+---
+
+The last two pages kept a list of every change the key's done, and trimmed anything older than 10 minutes so it doesn't
+grow forever. That works most of the time. But there's a gap in it, and it's the same kind of gap that causes most
+dupes.
+
+## The late retry
+
+Say a server sends a buy, the reply gets lost, and then the server gets stuck. A long hitch, a request queued behind a
+rate limit, whatever. By the time it retries, it's been 15 minutes.
+
+1. The buy goes through at 12:00, and the key remembers its id.
+2. The reply gets lost.
+3. At 12:10 the key trims the id, since it's older than 10 minutes.
+4. At 12:15 the retry shows up, finds no id, and buys again.
+
+The player's paid twice. Making the window longer doesn't fix it, it just makes it rarer. There's always some retry
+that's later than the window.
+
+## Keeping more ids doesn't work either
+
+The obvious fix is to just keep the ids longer. But a busy key goes through a lot of changes. Something like a shop that
+every server buys from can get hundreds a minute, and every id stored is written again every time the key's written.
+Keep an hour of them and the list ends up bigger than the data it's protecting, and the key gets slower to write the
+bigger it gets.
+
+## Remembering when, not just what
+
+What fixes it is having every change carry the time it was first sent, and the key remember one time of its own:
+everything sent before this has either been done or never will be.
+
+```luau
+local function apply(data, change)
+	if change.sentAt < data.horizon then
+		return "TooOld"
+	end
+	local seen = data.done[change.id]
+	if seen then
+		return seen.fate
+	end
+	-- not seen and not too old, so this is the first time
+	return nil
+end
+```
+
+Now the key can forget ids whenever it needs to, as long as it moves `horizon` up past them first. A retry from before
+the horizon doesn't get applied again, it gets told it's too old to know. The change might have gone through or it might
+not, but it'll never go through twice.
+
+## Moving the horizon
+
+So the key keeps a fixed number of recent ids, and when it needs room, it drops the oldest one and moves the horizon up
+to its time:
+
+```luau
+local function remember(data, change, fate)
+	if #data.order >= 64 then
+		local oldest = table.remove(data.order, 1)
+		data.horizon = math.max(data.horizon, data.done[oldest].sentAt)
+		data.done[oldest] = nil
+	end
+	data.done[change.id] = { fate = fate, sentAt = change.sentAt }
+	table.insert(data.order, change.id)
+end
+```
+
+The list never gets bigger than 64, however busy the key is. And nothing that's been forgotten can ever happen twice,
+because anything older than the horizon gets turned away.
+
+## Clocks being off
+
+One thing to watch with this is that `sentAt` comes from whichever server sent the change, and servers' clocks don't
+quite agree. If a server's clock is a bit behind, its brand new changes look older than they are, and one could land
+behind a horizon that a different server moved forward.
+
+That's never a dupe, the worst it can do is turn away a change that should've gone through. But it's still wrong, so
+the horizon has to leave room for clocks being off by a bit, and nothing that keeps data safe can depend on two servers'
+clocks agreeing. It can only ever decide whether something's too old to know about.
+
+## The trade-off
+
+The cost is that a really late retry on a really busy key might get "too old" instead of "already done". That's the
+same kind of answer as before: the game doesn't know for sure, so it doesn't give anything back, and the next time it
+loads the data it can see what actually happened.
+
+That's a much better place to be. A late retry can only ever be told it's too late, it can't ever buy something twice.
+And the key stays the same size whether it gets ten changes a day or ten thousand a minute.

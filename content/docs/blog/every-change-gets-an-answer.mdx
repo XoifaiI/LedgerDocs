@@ -1,0 +1,87 @@
+---
+title: Every change gets an answer
+description: Storing what happened to each change, so a retry gets the same answer as the first try.
+---
+
+Now that every change has an id and only ever happens once, there's a different problem. The server that sent it still
+doesn't always know what happened.
+
+## Returning nil isn't an answer
+
+Look at the buy from before. If the player's too poor it returns nil, and nothing gets written. If it's a retry of
+something that already went through, it also returns nil. From the caller's side those look exactly the same:
+
+```luau
+local ok, result = pcall(store.UpdateAsync, store, key, buy(changeId, 50, "sword"))
+
+if ok and result then
+	-- could be the buy, could be a retry that did nothing
+elseif ok then
+	-- too poor? already bought? no way to tell
+else
+	-- errored, might have gone through, might not
+end
+```
+
+So the game can't tell the player anything useful. Did they get the sword or not?
+
+## Remembering what happened
+
+The fix is storing what happened along with the id. So instead of just remembering it was done, the key remembers how it
+ended:
+
+```luau
+local function buy(changeId, cost, item)
+	return function(data)
+		if data.done[changeId] then
+			return nil
+		end
+		if data.money < cost then
+			data.done[changeId] = { fate = "TooPoor", at = os.time() }
+			return data
+		end
+		data.money -= cost
+		data.items[item] = true
+		data.done[changeId] = { fate = "Bought", at = os.time() }
+		return data
+	end
+end
+```
+
+Might seem odd to write when the buy got refused, but that write's the whole point. Now the refusal is saved too, so if
+the reply gets lost and you send it again, the key can tell you it was refused the first time. Without it, a retry would
+just try again. If the player's had money added in between, the retry would go through, even though the first one
+already told them no.
+
+## Reading the answer back
+
+Now the update can hand back what happened, whether it's the first try or the fifth:
+
+```luau
+local fate
+local ok = pcall(store.UpdateAsync, store, key, function(data)
+	local seen = data.done[changeId]
+	if seen then
+		fate = seen.fate
+		return nil
+	end
+	local new = buy(changeId, 50, "sword")(data)
+	fate = new.done[changeId].fate
+	return new
+end)
+```
+
+If `ok` is true, `fate` is the real answer, "Bought" or "TooPoor", even if this was the third time you sent it.
+
+## When you really can't know
+
+Only thing is sometimes you can't get an answer at all. If the server's shutting down, or Roblox is down for longer than
+you can wait, the change might have gone through and you just can't find out yet. In that case the answer is "don't
+know", not "failed".
+
+It sounds like a small thing, but it matters. If you tell the game it failed when it actually went through, the game
+might give the player their money back, and now they've got the sword and the money. Saying "don't know" means the game
+holds off, and the next time it loads that player's data it can see what really happened.
+
+So every change ends up with one of three kinds of answer: it happened, it got refused and why, or it can't be known
+right now. And because the key remembers, asking again always gives you the same answer.

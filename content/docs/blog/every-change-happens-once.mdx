@@ -1,0 +1,116 @@
+---
+title: Every change happens once
+description: Why a failed write might have gone through, and how ids make retries safe.
+---
+
+Sending changes instead of saving fixes the overwriting problem, but it brings up a new one. Every change is its own
+`UpdateAsync` now, and sometimes those fail.
+
+## When a write fails
+
+Datastore calls fail more than you'd think. Roblox's servers get busy, you hit a rate limit, or the request times out.
+So the normal thing is to wrap it in a pcall and try again:
+
+```luau
+local function send(key, change)
+	for attempt = 1, 5 do
+		local ok = pcall(store.UpdateAsync, store, key, change)
+		if ok then
+			return true
+		end
+		task.wait(attempt * 2)
+	end
+	return false
+end
+
+send(player.UserId, buy(50, "sword"))
+```
+
+This looks fine, and most of the time it is.
+
+## Failing doesn't mean it didn't happen
+
+Thing is, an error from `UpdateAsync` doesn't always mean nothing got written. Sometimes the write goes through fine and
+it's only the reply that gets lost on the way back, like a 502 or a timeout. From the server's side both look exactly
+the same, you just get an error.
+
+So here's what happens with that loop above:
+
+1. The player buys a sword for 50.
+2. `UpdateAsync` runs `buy`, takes the 50 and adds the sword. The write goes through.
+3. The reply gets lost and the call errors.
+4. The loop retries, and `buy` runs again on the new data.
+5. The player's paid 100 and has two swords.
+
+And if you don't retry, you've got no idea if they bought it or not, so you can't tell the player either.
+
+## Did the function even run?
+
+One thing you can check is whether your function actually ran. `UpdateAsync` only calls it once it's got the key's data
+from Roblox, so if it never ran, nothing could've been written:
+
+```luau
+local ran = false
+local ok = pcall(store.UpdateAsync, store, key, function(data)
+	ran = true
+	return buy(50, "sword")(data)
+end)
+
+if not ok and not ran then
+	-- never reached the key, safe to try again
+end
+```
+
+That helps, but only one way. If it never ran you're safe to retry. If it did run and still errored, you're back to not
+knowing, and that's exactly the case that dupes.
+
+## Giving every change an id
+
+The real fix is giving every change its own id, and having the key remember which ids it's already done:
+
+```luau
+local function buy(changeId, cost, item)
+	return function(data)
+		if data.done[changeId] then
+			return nil
+		end
+		if data.money < cost then
+			return nil
+		end
+		data.money -= cost
+		data.items[item] = true
+		data.done[changeId] = os.time()
+		return data
+	end
+end
+```
+
+The id gets made once, before the first attempt, and every retry sends the same one. So if step 2 above really did go
+through, the retry in step 4 finds the id already there and does nothing. The player pays 50 and gets one sword.
+
+Now retrying's always safe. You can send the same change as many times as you need and it only ever happens once, so
+there's nothing to guess about anymore.
+
+## Keeping the list small
+
+Only thing is `done` would grow forever, and keys have a size limit. But an id only matters while something might still
+retry it, and nothing retries a change from an hour ago. So you only keep the recent ones:
+
+```luau
+for id, at in data.done do
+	if os.time() - at > 600 then
+		data.done[id] = nil
+	end
+end
+```
+
+That runs inside the same update, so the list cleans itself up every time the key gets written, and it stays small no
+matter how many changes go through.
+
+## Knowing what happened
+
+There's one more thing that list gives you. Since the key remembers every recent change, it can also remember what
+happened to it, whether it went through or got refused because they were too poor. So even when the call errors, you
+can send it again and find out what actually happened.
+
+That's the next part.

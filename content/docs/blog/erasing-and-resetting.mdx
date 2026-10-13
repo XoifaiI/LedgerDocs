@@ -1,0 +1,133 @@
+---
+title: Erasing and resetting
+description: Why removing a key is harder than it looks, sealing before removing, and finishing trades before a wipe.
+---
+
+Sometimes you need to wipe a key. A player asks for their data to be deleted, or you reset someone's data after an
+exploit. It sounds like the easiest thing in the whole system, just remove it. It's actually one of the hardest, because
+it has to work against everything else that might be writing to that key at the same time.
+
+## Just removing it
+
+The obvious way is one call:
+
+```luau
+store:RemoveAsync(player.UserId)
+```
+
+That works if nothing else is going on. But think about everything from the last few pages:
+
+- A buy was sent a second ago, its reply got lost, and the retry's still coming.
+- Another server's halfway through a trade, holding one of this player's items.
+- A write from a server that hung lands a minute later.
+
+If any of those lands after the remove, the key comes straight back with their data in it. The wipe never really
+happened, and you've got no idea.
+
+## Late removes are worse
+
+It goes the other way too. `RemoveAsync` can error and still go through, the same as `UpdateAsync`, and it can land
+late. So this can happen:
+
+1. You remove a player's key, the call errors.
+2. The player joins again and starts playing, so the key gets made again.
+3. The first remove finally lands, and wipes their new data.
+
+And since a remove doesn't run a function, there's nothing it can check first. It just deletes whatever's there when it
+lands.
+
+## Seal it first
+
+So instead of removing straight away, you replace the data with a seal. A seal holds none of the player's data, it just
+says this key's been wiped:
+
+```luau
+store:UpdateAsync(player.UserId, function(data)
+	if data and data.sealed then
+		return nil
+	end
+	return {
+		sealed = {
+			id = eraseId,
+			at = os.time(),
+		},
+	}
+end)
+```
+
+Every other write checks for the seal first and doesn't write if it's there:
+
+```luau
+local function buy(changeId, cost, item)
+	return function(data)
+		if data.sealed then
+			return nil
+		end
+		-- the usual buy from before
+	end
+end
+```
+
+So a retry, a late write, or a hung server's write that lands after the seal finds it and does nothing. The data stays
+wiped. Then once the seal's in place, you remove the key, and the only thing the remove can delete is the seal.
+
+## The late remove again
+
+Removing the seal doesn't fix the late remove on its own. If the remove errors and lands later, after the key's been
+made again, it still wipes it.
+
+What fixes it is waiting. A seal can't be written over by a new key until it's old enough that any remove sent for it
+has either landed or never will. Roblox doesn't promise how late a request can land, but there's a point past which it
+doesn't happen. So a new key only replaces a seal once it's past that:
+
+```luau
+store:UpdateAsync(player.UserId, function(data)
+	if data and data.sealed then
+		if os.time() - data.sealed.at < sealAge then
+			return nil
+		end
+	end
+	return { money = 0, items = {}, done = {} }
+end)
+```
+
+And if the remove got lost completely, the seal doesn't just sit there forever. Whatever touches the key next sees an
+old seal and sends the remove again.
+
+## Trades on a key that's being wiped
+
+This is where it gets messy. If a player's halfway through a trade when their key gets wiped, the trade still needs to
+finish, one way or the other. If the trade had already been decided and the item's gone to someone else, wiping the
+held change would mean the buyer got an item that came from nowhere.
+
+So a wipe can't just throw held changes away. Before it seals, it finishes every trade on the key first, the same way a
+server that finds a held change does:
+
+```luau
+store:UpdateAsync(player.UserId, function(data)
+	if next(data.held) then
+		data.wiping = { id = eraseId, at = os.time() }
+		return data
+	end
+	return { sealed = { id = eraseId, at = os.time() } }
+end)
+```
+
+While `wiping` is on the key, no new trades can hold anything on it, so the list of held changes only gets shorter. Once
+every trade's been settled, the wipe seals the key and removes it. And if the server that started the wipe dies, any
+server that touches the key finishes the wipe itself, the same way it'd finish a trade.
+
+## Resetting
+
+A reset's the same idea, it just keeps the key. Instead of sealing it, it puts the player back to the default data. It
+still has to finish any trades on the key first, for the same reason, and it still has to remember its own id, so a
+reset that errors and gets sent again doesn't wipe them twice.
+
+## Saying what got wiped
+
+If a wipe or a reset takes away money or items, it says exactly what it took and from which key. A reset keeps that in
+its own write, and a wipe hands it back in its answer, so there's a record of anything that went.
+
+Worst case is something that can't be put back at all, like a held change that's still waiting after 30 days because the
+other key's gone. Then it doesn't just quietly disappear either. It gets given back where it can, and if not, it warns
+with the amount, what it was, and which key it was on, so nothing goes missing without you hearing about it.

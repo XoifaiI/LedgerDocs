@@ -1,0 +1,77 @@
+---
+title: Making datastores that can't lose or dupe data
+description: How most games save data, why session locking isn't the answer, and sending changes instead.
+---
+
+Data loss and dupes are probably the most common bugs in any Roblox game that saves stuff. Most of the time it's not
+because someone wrote bad code, it's because datastores have a few edge cases that are really easy to miss. I've spent
+a while working through all of them, so this goes through what they are and how I deal with each one.
+
+## How most games save data
+
+Usually a game loads the player's data when they join, keeps it in a table while they play, and saves it when they
+leave:
+
+```luau
+Players.PlayerAdded:Connect(function(player)
+	local data = store:GetAsync(player.UserId) or { money = 0, items = {} }
+	cache[player] = data
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	store:SetAsync(player.UserId, cache[player])
+	cache[player] = nil
+end)
+```
+
+This works fine most of the time. The problem is when a player leaves one server and joins another before the save's
+finished. The new server loads the old data, and whatever they did on the last server is just gone.
+
+## Session locking
+
+The usual fix for that is session locking. When a player joins, the server puts a lock on their key saying it owns it.
+While that lock's there, no other server can write to the key, and when the player leaves the server saves and takes
+the lock off.
+
+```luau
+local ok = store:UpdateAsync(player.UserId, function(data)
+	data = data or { money = 0, items = {} }
+	if data.lock and os.time() - data.lock.at < 1800 then
+		return nil
+	end
+	data.lock = { server = game.JobId, at = os.time() }
+	return data
+end)
+```
+
+It does stop the old data overwriting the new data, but it comes with its own problems:
+
+- If a player switches servers, the new server has to wait for the old one to save and drop the lock. So they either
+  sit there waiting, or the new server steals the lock and whatever the old one hadn't saved yet gets lost.
+- If a server crashes, it never drops the lock. The player can't load anywhere until the lock times out.
+- Only one server can ever touch a key, so you can't change a player's data from another server, or from outside the
+  game.
+
+## Sending changes instead of saving
+
+What i do instead is never save the whole table. Every change gets sent straight to the key as its own update:
+
+```luau
+local function buy(cost, item)
+	return function(data)
+		if data.money < cost then
+			return nil
+		end
+		data.money -= cost
+		data.items[item] = true
+		return data
+	end
+end
+
+store:UpdateAsync(player.UserId, buy(50, "sword"))
+```
+
+`UpdateAsync` always runs on the latest data, so two servers can change the same key without overwriting each other,
+and nothing needs locking. Returning nil means nothing gets written, so if they're too poor nothing happens.
+
+It's a pretty different way of thinking about it, but it's what everything else in this is built on.

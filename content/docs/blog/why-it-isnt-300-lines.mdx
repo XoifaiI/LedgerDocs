@@ -1,0 +1,95 @@
+---
+title: Why it isn't 300 lines
+description: Every page in this series fits in a few short samples. Putting them all on the same key at once is where the other 45,000 lines go.
+---
+
+If you add up every code sample in this series it's maybe 300 lines. Ids, answers, a horizon, holds, a deciding key,
+seals, shards. Each page fixed one problem, and each fix was short. So it'd be fair to think Ledger's a few hundred
+lines, maybe a thousand with the boring bits.
+
+Ledger 7 is about 45,000 lines of Luau across 201 files. This page is about where the rest goes.
+
+## Every fix was on its own
+
+Every page fixed one problem with nothing else going on. But on a real key, all of it's happening at once. A wipe happens
+while a trade's holding an item, a batch of ten changes goes out and one of them meets the seal, a hold is still waiting
+when the horizon moves past the trade it's waiting on. Each fix on its own is right. Put two of them on the same key and
+you get a case neither page thought about.
+
+Take the batching from earlier and the seal from the wipes page:
+
+```luau
+store:UpdateAsync(key, function(data)
+	if data.sealed then
+		return nil
+	end
+	for _, change in queue do
+		data = apply(data, change)
+	end
+	return data
+end)
+```
+
+That looks fine, but now all ten changes in the queue got the same "nothing happened", and the game has to be told
+something for each one. Was it wiped before or after they were sent? Should they be refused, or is it too late to know?
+And if this was a retry, did some of them already land before the seal did? Every one of those needs an answer, and the
+answer has to be the same one a different server would give.
+
+## The function runs more than once
+
+`UpdateAsync` can run your function again if another server wrote the key in between. So it might run three times, and
+each run sees different data and decides something different. One run says "Bought", the next says "TooPoor", and only
+one of them is the write that actually happened. If the call then errors, you don't even know which one that was.
+
+So nothing you work out inside the function can be trusted until the write's happened, and anything the game gets told
+has to come from the run that counted. Every answer in Ledger is worked out that way, for every kind of change.
+
+## You can't look at another key while you write
+
+The function you give `UpdateAsync` can't yield, so it can't read any other key. That's why the trade cleanup had to
+read the buyer first and then write. And that read can be a few seconds old, so it can't decide anything on its own. It
+has to be backed up by a write that checks again. That's true of every decision that depends on another key, and a lot
+of the old bugs were a decision made from a read that nothing ever checked.
+
+## Everything has a limit
+
+The samples just keep adding to tables. Roblox doesn't let you do that forever:
+
+- A key can only take so many bytes of writes a minute, and every write rewrites the whole key. So every bit of
+  bookkeeping on a key costs you writes, and it all has to stay a fixed size however busy the key gets.
+- Every server only gets so many requests a minute, shared with everything else in your game. So every background
+  read, every cleanup and every retry has to fit in a budget, and busy keys have to wait and batch instead of sending
+  more.
+- MemoryStore can lose anything at any time, so it can only ever be used to save requests, never to remember anything
+  that matters.
+
+Ledger packs its own bookkeeping into a compact format just to stay under those limits.
+
+## Old servers keep running
+
+When you publish an update, old servers don't stop straight away. For a while, servers running your old reducer and
+servers running your new one are writing the same keys. An old server can't apply a change it's never heard of, and a
+new server's data has to survive being written by an old one. That's its own whole part of Ledger.
+
+## Nothing can wait for a server
+
+Every one of those pages ended with "the next server to touch it finishes it off". That's the thing that removes the
+cleanup system, but it also means every server has to be able to finish anything any other server started: a trade, a
+wipe, a held unit of stock, a late write. And it has to do that from whatever state the key's in, with no idea what the
+other server was doing.
+
+## Every call gets one answer
+
+Then there's the game. Every call has to get exactly one answer, through retries, crashes, a server shutting down, and
+the player leaving halfway. Changes are shown to the player straight away, before they're saved, so the session has to
+line up what the player sees with what's actually on the key once the write comes back.
+
+## So where do 45,000 lines go
+
+That's the real size of it. Not the fixes, the ways they meet. The core of Ledger is a state machine: an event comes in,
+like a write happening, a write erroring, a timer, or a call from the game, and it works out what changes and what to send
+next. Every one of those events has to be handled in every state a key can be in, under every way a request can fail.
+
+That's also why the design was checked with TLA+ before any code was written. You can't test every combination of all
+of this by hand, there are far too many. The last page of this series goes through how that worked, and some of the
+stranger bugs it found.

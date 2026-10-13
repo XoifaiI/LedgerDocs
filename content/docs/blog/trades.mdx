@@ -1,0 +1,249 @@
+---
+title: Trades
+description: Changing two keys together, why two-phase commit costs so much, and deciding a trade on its last key.
+---
+
+Everything so far has been one key. A trade's at least two, and that's where it gets harder, since `UpdateAsync` can
+only ever change one key at a time. There's nothing in datastores that changes two keys together.
+
+All the problems from the last few pages still apply here: writes that error but went through, retries, answers,
+forgetting ids. They just apply to every key in the trade at once, and a trade brings a few new ones of its own.
+
+## Just doing both
+
+The first thing you'd try is two updates, one after the other:
+
+```luau
+sellerStore:UpdateAsync(seller, function(data)
+	data.items.k3f9x2 = nil
+	data.money += 100
+	return data
+end)
+
+buyerStore:UpdateAsync(buyer, function(data)
+	if data.money < 100 then
+		return nil
+	end
+	data.money -= 100
+	data.items.k3f9x2 = true
+	return data
+end)
+```
+
+If the server dies between the two, the seller's been paid and lost their item, and the buyer got nothing. If the
+buyer's too poor, the seller's already been changed and you've got to undo it, which is just another write that can
+fail. And if the first write errors, you're back to not knowing if it went through, except now there's a second key
+depending on it.
+
+## Holding the change first
+
+So instead of changing the seller straight away, you hold the change on it. Nothing moves yet, the key just remembers
+that this trade's waiting on it:
+
+```luau
+sellerStore:UpdateAsync(seller, function(data)
+	if data.done[tradeId] or data.held[tradeId] then
+		return nil
+	end
+	if not data.items.k3f9x2 then
+		data.done[tradeId] = "Refused"
+		return data
+	end
+	data.held[tradeId] = { give = "k3f9x2", get = 100, at = sentAt }
+	return data
+end)
+```
+
+The trade's id works the same as any change id from before. If this write errors and you send it again, it finds the
+hold already there and does nothing, so you can't end up holding the item twice.
+
+While it's held, the item's still the seller's but it's spoken for. Then there's only one question left: did the trade
+happen or not. That answer has to live somewhere every server can check.
+
+## The usual way: a deciding key
+
+The textbook way to do this is called two-phase commit. You hold the change on every key, then write the decision to a
+separate key just for this trade, then go back and apply it on every key:
+
+1. Hold on the seller.
+2. Hold on the buyer.
+3. Write "done" to the trade's own key.
+4. Apply on the seller.
+5. Apply on the buyer.
+
+If a server dies anywhere in there, another one can read the trade's key and finish it off. It works, but it's 5 writes
+for a 2-player trade, and every trade leaves a key behind. Something then has to go around cleaning those up: keep a list
+of every trade, walk it, check each one's finished, remove the key. That cleanup is its own system with its own bugs.
+Ledger used to work exactly like this, and once the cleanup was counted a two-player trade was about 8 writes. A lot of
+the old bugs lived in the cleanup: lists that never got fully walked, keys found in the wrong order, a decision key
+removed just as a retry rewrote it.
+
+## Deciding on the last key
+
+The thing is, the decision doesn't need its own key. It can go on the last key in the trade, in the same write that
+changes it:
+
+```luau
+buyerStore:UpdateAsync(buyer, function(data)
+	if data.done[tradeId] then
+		return nil
+	end
+	if data.money < 100 then
+		data.done[tradeId] = "Refused"
+		return data
+	end
+	data.money -= 100
+	data.items.k3f9x2 = true
+	data.done[tradeId] = "Done"
+	return data
+end)
+```
+
+That one write applies the buyer's side and decides the whole trade. If the buyer says "Done", the trade happened. If it
+says "Refused", it didn't, and nothing about the buyer changed.
+
+So the trade is just:
+
+1. Hold on the seller.
+2. Decide on the buyer.
+
+Then the seller's held change gets applied, or dropped if it was refused. That last part doesn't have to happen before
+the trade's done. The trade already happened the moment the buyer's write landed.
+
+## What the game gets told
+
+The game finds out how the trade went from the buyer's key, since that's where it got decided. If step 2 goes through,
+you know straight away if it was done or refused.
+
+If step 2 errors, you just send it again with the same trade id. The buyer remembers what it already decided, so you get
+that back instead of it deciding twice. And if you can't get through at all, you tell the game you don't know yet. It
+holds off, and next time the buyer's loaded you can see what happened.
+
+## Servers dying halfway
+
+If a server dies after step 1, the held change is still sitting on the seller. Whichever server touches the seller next
+sees it and has to find out how the trade went.
+
+Only thing is, you can't read the buyer from inside the seller's update. The function you give `UpdateAsync` isn't
+allowed to yield, so it can't make another datastore call. The read has to happen first, outside it:
+
+```luau
+local seller = sellerStore:GetAsync(sellerId)
+for tradeId, change in seller.held do
+	local buyer = buyerStore:GetAsync(change.decider)
+	local fate = buyer and buyer.done[tradeId]
+	if fate then
+		sellerStore:UpdateAsync(sellerId, settle(tradeId, fate))
+	else
+		buyerStore:UpdateAsync(change.decider, refuse(tradeId))
+	end
+end
+```
+
+And that read could be old. `GetAsync` can give you data from a few seconds ago, so "not decided yet" might just mean
+you're not seeing the decision yet. That's why the `else` doesn't trust it. It doesn't just drop the hold, it writes
+"Refused" onto the buyer, and `refuse` only writes if the buyer still hasn't decided:
+
+```luau
+local function refuse(tradeId)
+	return function(data)
+		if data.done[tradeId] then
+			return nil -- it did get decided, so leave it
+		end
+		data.done[tradeId] = "Refused"
+		return data
+	end
+end
+```
+
+`UpdateAsync` always runs on the latest data, so that write is the thing you can trust, not the read before it. Either
+it lands and the trade's refused for good, or it finds the real answer already there. Once the buyer's got an answer
+either way, the seller's hold gets settled to match it.
+
+There's no list of trades to go through and nothing running in the background. A trade left halfway gets finished the
+next time anyone touches one of its keys, and that's usually right away, since it's normally the player loading in.
+
+## A write that shows up late
+
+That last part's the important one. Writes can land late, a lot later than you'd think, even after the server that sent
+them is gone. So you have to plan for this:
+
+1. Server A holds on the seller, then hangs.
+2. Server B finds the hold, writes "Refused" on the buyer, drops the hold.
+3. Server A's step 2 finally lands on the buyer.
+
+If the buyer had nothing stopping it, step 3 would buy the item with no hold behind it. That's an item made out of
+nothing. This is why the decision has to be written even when it's a refusal. The buyer's `done` list already has
+"Refused" for that trade, so step 3 finds it and does nothing.
+
+The same goes for a hold that lands late, after its trade was already refused. It just sits there until the next touch,
+which checks the buyer, sees "Refused", and drops it.
+
+## The deciding key can't forget too early
+
+The forgetting from the last page gets riskier here. If the buyer forgets the trade id while the seller's still holding,
+the next server to check can't tell if it went through. So the deciding key has to remember a trade for longer than any
+hold could still be waiting on it.
+
+Holds normally get settled within seconds, the next time either key's touched. But a key nobody ever touches again, like
+a player who quit, could keep its hold forever. So there's a hard limit: a hold that's still there after 30 days gets
+given back, with a warning saying exactly what was given back and on which key. The deciding key keeps its answer longer
+than that. So a hold can never outlive the answer it's waiting on.
+
+## Two trades on the same item
+
+Now that items can be held, a second trade might try to use something that's already held. The hold from before
+just needs to check for that too:
+
+```luau
+local result
+sellerStore:UpdateAsync(seller, function(data)
+	for _, change in data.held do
+		if change.give == itemId then
+			result = "Busy"
+			return nil
+		end
+	end
+	data.held[tradeId] = { give = itemId, get = 100, at = sentAt }
+	result = "Held"
+	return data
+end)
+```
+
+The second trade just gets told the item's busy, straight away, and the game can try again in a second. Nothing ever
+waits on anything else, so two trades can't get stuck waiting on each other. The same goes for the rest of the player's
+data: buying, selling, anything that doesn't touch what's held carries on like normal.
+
+## Same id, different trade
+
+One more thing the ids have to handle. If a game sends a trade, it errors, and the retry goes out with the same id but a
+different item or price, that isn't a retry. It's a different trade that happens to share a name. If the keys treated it
+as the same one, they could answer "Done" for terms that never happened.
+
+So every trade also carries a fingerprint of its terms, and a key that sees the same id with a different fingerprint
+refuses it instead of treating it as a retry:
+
+```luau
+local result
+store:UpdateAsync(key, function(data)
+	local seen = data.done[tradeId]
+	if seen then
+		result = if seen.terms == termsOf(change) then seen.fate else "OtherTerms"
+		return nil
+	end
+	-- the first time this id's been seen, so apply it as normal
+end)
+```
+
+`termsOf` has to print the same terms the same way every time, on every server. The old version of Ledger once printed
+`{[1] = "a"}` and `{["1"] = "a"}` as the same thing, so two different trades looked like one.
+
+## Picking the deciding key
+
+Any key in the trade can be the deciding one, but it's worth picking well. It's the key that gets the full change
+straight away, while every other key only holds its part until the trade's decided. So if one key in the trade is the
+trade record or a log, put it last. A 5-for-5 trade with a trade record is the same thing, just with more held keys, and
+it still takes one write per key.
+
+Might seem a bit odd that the trade gets decided on one of its own keys and not somewhere neutral, but that's what gets
+rid of the extra key, the cleanup, and most of the bugs that came with them.

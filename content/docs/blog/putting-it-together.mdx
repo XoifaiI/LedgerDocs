@@ -1,0 +1,80 @@
+---
+title: Putting it together
+description: What the examples from the earlier pages look like when Ledger does all of it for you.
+---
+
+So that's everything Ledger does on every write. Ids so changes only happen once, answers stored on the key, a horizon
+so ids can be forgotten, holds and a deciding key for trades, seals for wipes, shards and parts for busy keys, and a
+deadline for shutting down. And the last page went through what it takes to get all of that right at the same time.
+
+Here's what the examples from earlier look like when Ledger's doing all of it for you.
+
+## The buy
+
+Remember the buy from the start, which grew a `done` list, a fate, a horizon and a list of recent ids by the end. In
+Ledger it goes back to being just the part you actually care about:
+
+```luau
+local PlayerStore = Ledger.New<<PlayerData, PlayerOps>>({
+	Name = "PlayerData",
+	Keys = "Player",
+	Default = { Gold = 0, Items = {} },
+	MustExist = false,
+	Erasable = true,
+	Reducer = function(Data, Op)
+		if Op.Kind == "Buy" then
+			if Data.Gold < Op.Price then
+				return nil
+			end
+			local Items = table.clone(Data.Items)
+			Items[Op.Item] = true
+			return { Gold = Data.Gold - Op.Price, Items = Items }
+		end
+		return nil
+	end,
+})
+```
+
+There's no `done` list in there, no ids and no horizon. Ledger keeps all of that on the key next to your data, and your
+reducer only ever sees the data.
+
+Sending a buy looks like this:
+
+```luau
+local Session = PlayerStore:Load(Player)
+local Ok, Result = Session:Apply({ Kind = "Buy", Price = 50, Item = "Sword" })
+```
+
+It gets an id without you asking, it can't dupe if a write errors, and `Ok` and `Result` are the answer from the
+answers page: it went through, it got refused and why, or it can't be known yet.
+
+## The trade
+
+The trades page needed holds on every key, a deciding key, reads that can't be trusted until a write backs them up, late
+writes being turned away, and whoever touched the key next cleaning up. In Ledger it's one call:
+
+```luau
+local Ok, Result, Info = Ledger.Tx({
+	PlayerStore:Leg(SellerId, { Kind = "SellItem", Item = Item, Price = Price }),
+	PlayerStore:Leg(BuyerId, { Kind = "BuyItem", Item = Item, Price = Price }),
+})
+```
+
+The first leg gets held and the last one decides it in its own write, so a two-player trade is 2 requests. If a server
+dies halfway, the next server to touch either player finishes it off. You never write that part.
+
+## The stock
+
+And the limited sword from the hot keys page, split across parts so every server can sell at once without ever selling
+one too many:
+
+```luau
+local Sword = ItemStore:Quantity("GoldenSword")
+local Ok, Result = Sword:Take(1, { Id = OrderId, IdAt = Ledger.Now() })
+```
+
+It picks a part, moves on to the next if that one's sold out, and makes sure a buy only ever lands on one of them.
+
+That's the idea of the whole thing. Everything in this series is still happening on every one of those calls, you just
+don't have to think about it. The [docs](/docs) go through the rest: wipes, counters, following other keys, and shutting
+down.

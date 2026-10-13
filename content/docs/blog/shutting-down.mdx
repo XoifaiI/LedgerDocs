@@ -1,0 +1,69 @@
+---
+title: Shutting down
+description: Using BindToClose properly, a deadline instead of a timeout, and leaving nothing that only the closing server can clean up.
+---
+
+When a server shuts down, `BindToClose` gives you about 30 seconds. Everything up to now assumed a server might die at
+any point, so nothing gets lost when one does. Shutting down's the one time you get a warning, and it's worth using it
+properly.
+
+## What's still going on
+
+When the close starts, a server can have all sorts still in flight:
+
+- Changes queued up but not sent yet.
+- Writes that went out and haven't come back.
+- A trade halfway through, holding something on another key.
+- Calls the game's still waiting on, like a buy the player clicked a second ago.
+
+The aim is simple. Get as much of that through as you can in the time you've got, and leave everything else in a state
+the next server can pick up.
+
+## Sending what's queued
+
+The first thing is getting queued changes out. Every key with something waiting gets one last write:
+
+```luau
+game:BindToClose(function()
+	for key, queue in queues do
+		task.spawn(function()
+			store:UpdateAsync(key, function(data)
+				for _, change in queue do
+					data = apply(data, change)
+				end
+				return data
+			end)
+		end)
+	end
+	waitUntilDone(25)
+end)
+```
+
+The ids still apply, so if one of these errors and the server goes away, nothing's lost. Either it landed, or it didn't
+and the game never got told it did.
+
+## A deadline, not just a timeout
+
+Only thing is you can't just keep retrying until the server's killed. A write sent a second before the server dies can
+still land a minute later, after the player's already on another server. Most of the time the ids make that harmless,
+but there's no reason to send things you can't follow up on.
+
+So there's a deadline a few seconds before the close runs out. Past that, nothing new gets sent at all: no retries, no
+new writes, nothing. Whatever's still out after that gets left to land or not on its own.
+
+## Answering everything
+
+Every call the game's waiting on gets an answer before the server goes:
+
+- If it landed, the game gets told it landed.
+- If it got refused, the game gets that.
+- If it's still out at the deadline, the game gets told it can't know.
+
+Nothing just hangs, and nothing gets told it failed when it might not have.
+
+## What gets left behind
+
+A trade that's halfway through is fine to leave. Whatever's held stays held, and the next server to touch either key
+finishes it off, the same as if the server had crashed. Same for a wipe that's started. That's the whole point of
+everything being settled on touch: shutting down doesn't need any special cleanup, because there's nothing that can only
+be cleaned up by the server that started it.

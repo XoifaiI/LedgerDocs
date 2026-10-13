@@ -1,0 +1,17 @@
+{
+  "title": "Blog",
+  "root": true,
+  "pages": [
+    "introduction",
+    "every-change-happens-once",
+    "every-change-gets-an-answer",
+    "forgetting-safely",
+    "trades",
+    "erasing-and-resetting",
+    "totals-and-hot-keys",
+    "shutting-down",
+    "why-it-isnt-300-lines",
+    "putting-it-together",
+    "how-it-was-checked"
+  ]
+}

@@ -7,7 +7,10 @@ export function baseOptions(): BaseLayoutProps {
       // JSX supported
       title: appName,
     },
-    links: [{ text: "Store builder", url: "/builder" }],
+    links: [
+      { text: "Store builder", url: "/builder" },
+      { text: "Blog", url: "/docs/blog/introduction" },
+    ],
     githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,
   };
 }

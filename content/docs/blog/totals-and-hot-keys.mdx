@@ -1,0 +1,149 @@
+---
+title: Totals and hot keys
+description: Keys every server writes to at once, splitting counters into shards, and selling limited stock without ever selling one too many.
+---
+
+Everything so far has been keys that a few servers write to at most, like a player's data. Some keys aren't like that. A
+global counter for an event, a shop item with limited stock, anything every server in the game writes to at once.
+
+## One key, every server
+
+Say you want a counter of how many eggs have been hatched across the whole game:
+
+```luau
+local function bump(changeId, amount)
+	return function(data)
+		data = data or { count = 0, done = {} }
+		if data.done[changeId] then
+			return nil
+		end
+		data.count += amount
+		data.done[changeId] = os.time()
+		return data
+	end
+end
+
+counterStore:UpdateAsync("EggsHatched", bump(changeId, 1))
+```
+
+That's fine with one server. With a thousand it falls apart. Roblox only lets one key take so many writes a minute, and
+so many bytes a minute, no matter how many servers are sending. Past that, writes just get throttled and wait. And every
+bump adds an id to `done`, so the key keeps getting bigger and each write costs more of that byte limit, so it fits even
+fewer writes.
+
+## Splitting it up
+
+So you split the counter over a few keys, called shards, and each server writes to one of them:
+
+```luau
+local shards = 16
+local home = (hash(game.JobId) % shards) + 1
+
+counterStore:UpdateAsync("EggsHatched/" .. home, bump(changeId, 1))
+```
+
+Sixteen shards means sixteen times the writes. To read the total you add them all up:
+
+```luau
+local total = 0
+for i = 1, shards do
+	local data = counterStore:GetAsync("EggsHatched/" .. i)
+	total += data and data.count or 0
+end
+```
+
+## Keeping the ids small
+
+Shards fix how many writes fit, but not the ids. A busy shard still gets a new id for every bump.
+
+The trick is that each server sends to the same shard every time. So instead of remembering every bump, the shard only
+remembers the latest bump number for each server:
+
+```luau
+local function bump(serverId, number, amount)
+	return function(data)
+		if (data.servers[serverId] or 0) >= number then
+			return nil
+		end
+		data.count += amount
+		data.servers[serverId] = number
+		return data
+	end
+end
+```
+
+A server numbers its bumps 1, 2, 3 and so on, and only sends the next one once the last one's landed. So if a shard's
+already seen bump 7 from a server, any retry of bump 7 or lower can't be applied again. The shard holds one small entry
+per server that writes to it, not one per bump.
+
+Servers come and go though, so those entries would still pile up over time. So an entry for a server that hasn't
+written in a while gets dropped, and the shard moves a horizon past it, the same trick as the ids. A bump from that old
+server showing up really late gets turned away instead of applied twice.
+
+## Batching on busy shards
+
+Even with shards, a busy one gets more bumps than it can write one at a time. So each server waits a bit between writes
+to its shard, and everything that comes in while it waits goes out together in the next write. The busier the shard, the
+longer it waits, so it stays well under the limit and each write just carries more.
+
+## Reading it cheaply
+
+Adding up 16 shards is 16 reads every time. If every server wants the total every few seconds, that's a lot of reads for
+one number.
+
+So one server keeps a shared copy of the shard totals in MemoryStore, and everyone else reads that. The copy's just there
+to save reads, it's never what decides anything. If MemoryStore's down or the copy's old, servers go back to reading the
+shards themselves. And each shard's copy carries the shard's own write count, so an older copy can never overwrite a
+newer one, even if two servers both think they're keeping it.
+
+## Limited stock
+
+Counters are the easy case, since bumps can never be refused. Limited stock's harder. Say you're selling 1,000 of an
+item, every server's buying at once, and you can't ever sell 1,001.
+
+One key holding the stock has the same problem as the counter: it's one key and every server's hitting it. But you can't
+just shard it like a counter, because each shard would have to know how much the others have sold.
+
+So you split the stock itself. 1,000 units across 10 keys is 100 each, and each key only ever sells what it's got:
+
+```luau
+local function take(changeId)
+	return function(data)
+		if data.done[changeId] then
+			return nil
+		end
+		if data.left <= 0 then
+			data.done[changeId] = "SoldOut"
+			return data
+		end
+		data.left -= 1
+		data.done[changeId] = "Took"
+		return data
+	end
+end
+```
+
+No part can ever go below zero, so the total can never go past 1,000. And each part's just a normal key, so everything
+from the earlier pages still applies: retries, ids, answers.
+
+## When one part runs out
+
+A buyer whose part's sold out moves on to the next one. The tricky part is making sure a buy never lands on two parts. If
+it got refused on part 3, moved on to part 4, and then a late retry of part 3 went through after all, they'd have bought
+it twice.
+
+But part 3 already wrote down "SoldOut" for that id when it refused. So a late retry finds that and does nothing, which
+is the same thing that stops late trade writes. A buy only moves on once the earlier part has a definite no on it, so it
+can only ever land on one part.
+
+## Sold out stays sold out
+
+A part with nothing left marks itself sealed, and nothing ever unseals it. So once every part's sealed, the item's sold
+out for good. That's a fact you can check any time, from anywhere, without needing to read all the parts at the same
+moment.
+
+## Holding stock
+
+Sometimes you want to hold a unit while the player confirms, like a checkout. The hold goes on the part itself, in the
+same write that takes the unit out of what's left. Then it either gets confirmed, released, or runs out on its own.
+Nothing about it lives in MemoryStore, so a server going down can't lose a hold or leave one stuck.
