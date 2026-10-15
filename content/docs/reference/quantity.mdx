@@ -49,7 +49,7 @@ Do not change `Parts`, `Mode`, `Stock`, `Serials` or `Proceeds` of a live quanti
 
 `Options` is `{ Price?, Id?, IdAt?, Legs? }`. Give `Id` and `IdAt` together: a named take is safe to resend. `Legs` are changes to other keys, such as the buyer's coins. The take and those changes happen together. `Price` adds to the quantity's proceeds and takes nothing from the buyer, so charge the buyer in `Legs`.
 
-On `true`, `Result` is `{ Part, Value }`. `Value` is the serial number, or `nil` without `Serials`.
+On `true`, `Result` is `{ Part, Value }`. `Value` is the serial number, or `nil` without `Serials`. Take more than one and you get numbers in a row: `Value`, `Value + 1`, and so on.
 
 If you build the options in a separate function, give them the type `Ledger.TakeOptions`, or build each leg with `Store:Leg`. Otherwise Studio's type check can't tell which op goes with which store, and complains.
 
@@ -57,7 +57,7 @@ If you build the options in a separate function, give them the type `Ledger.Take
 | --- | --- | --- |
 | `true` | Sold. | Done. |
 | `SoldOut` | A Final quantity has none left, for good. | Stop selling it. |
-| `Short` | Too few free units right now. `Info.ShortReason` is `"Free"`, `"Held"`, `"Holds"` or `"Gone"`. | Tell the player. A named take needs a new name to try again. |
+| `Short` | Too few free units right now. `Info.ShortReason` is `"Free"`, `"Held"`, `"Holds"` or `"Gone"`. Taking more than one numbered item can also answer `"Free"` when the numbers left aren't in a row. | Tell the player. A named take needs a new name to try again. |
 | `Missing` | Not opened yet, closed and removed, or a key in `Legs` is missing. | `Open()` once if it was never opened. |
 | `Refused` or `Full` | A rule said no. `Info.Key` names the key. | Tell the player. |
 | `Busy` or `Closed` | Nothing was sent. | `Busy`: send the same call again. |
@@ -74,6 +74,21 @@ end
 ```
 
 `Hold` answers `true, Hold`, `SoldOut` or `Short`. `Confirm` takes the same `Price` and `Legs` as `Take`. If the hold ran out, `Confirm` uses a free unit; if there is none it answers `Short` with `ShortReason "Gone"`, never `SoldOut`. `Release(Hold)` answers `true`.
+
+Calling `Confirm` twice with the same hold sells two. The hold is used up by the first, so the second takes another unit. Roblox can send the same receipt twice, so put the purchase id in a leg on the buyer, and have the reducer refuse an id it has already seen, like on [Purchases](/docs/learn/purchases). Then a repeat is refused and nothing extra is sold.
+
+If `Confirm` answers `Refused`, `Peek` the player: if the id is in their data, the purchase already went through. If it answers `Unresolved`, tell Roblox it's not processed yet. The receipt comes again, and the id check makes that safe.
+
+```luau
+Sword:Confirm(Hold, {
+	Legs = { {
+		Store = PlayerStore,
+		Key = Receipt.PlayerId,
+		Op = { Kind = "GrantSword", PurchaseId = Receipt.PurchaseId },
+		Slot = { "Serials", "Sword" },
+	} },
+})
+```
 
 A hold lasts 60 seconds longer than the `Duration` you ask for, because server clocks can differ by that much. Until then the unit stays held: a `Take` that needs it answers `Busy`, and `Confirm` still works. After that the unit is free again. So show the buyer the time you asked for, not the extra minute.
 

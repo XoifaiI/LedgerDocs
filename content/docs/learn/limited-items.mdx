@@ -195,4 +195,6 @@ GoldenSword = { Parts = 2, Mode = "Final", Stock = 300, Serials = { First = 1, C
 
 If the player has to confirm first, like a Robux purchase, you can hold a sword for a few minutes so nobody else gets it meanwhile. See `Hold`, `Confirm` and `Release` in the [reference](/docs/reference/quantity).
 
+Roblox can send the same receipt twice, and every `Confirm` sells a sword. Put the purchase id in the buyer's leg so the reducer can refuse a repeat. The [reference](/docs/reference/quantity#hold-and-confirm) shows how.
+
 Next: [Global counters](/docs/learn/global-counters)

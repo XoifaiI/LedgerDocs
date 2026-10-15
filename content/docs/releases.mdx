@@ -5,6 +5,14 @@ description: What changed from v6, and what you have to change with it.
 
 `+` is new in v7, `~` exists in v6 and works differently now, `-` is gone, `!` is something to know before you upgrade.
 
+## 7.0.3
+
+```diff
++ Fixed output order bug by forcing ordering
+```
+
+If you sell with `Hold` and `Confirm`, read [Hold and Confirm](/docs/reference/quantity#hold-and-confirm): calling `Confirm` twice with the same hold sells two, so the buyer's leg needs the purchase id.
+
 ## 7.0.2
 
 ```diff
