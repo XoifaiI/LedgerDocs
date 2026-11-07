@@ -5,7 +5,30 @@ description: What changed from v6, and what you have to change with it.
 
 `+` is new in v7, `~` exists in v6 and works differently now, `-` is gone, `!` is something to know before you upgrade.
 
-## 7.0.5 [#705]
+## 7.1.0 [#710]
+
+One key can now be followed by millions of servers, and saves are far smaller.
+
+### What a game gets
+
+| | 7.0.5 | 7.1.0 |
+|---|---|---|
+| Servers following one busy key | ~3,750 | **~1.9 million** |
+| Servers following one quiet key | ~30,000 | **~15 million** |
+| Copy reads a minute across the game | ~0.8 million | **~13.6 million** |
+| MemoryStore maps copies and totals spread over | 16 | **256** |
+| A 100 KB player's save | 100 KB | **~12.5 KB** |
+
+Follower numbers are at half of Roblox's MemoryStore limits. The save size is one measured player state; yours depends on your data.
+
+```diff
++ Follow and Peek with MaxAge spread a busy key's copy over up to 512 MemoryStore replicas as it gets hot
++ Total spreads its summary the same way
++ Data over 1 KB saves compressed whenever that is smaller, not only near the 4 MB limit
+~ Size warnings count the saved size, and also warn when a key's data passes 4 MB as JSON
+```
+
+## 7.0.5
 
 ```diff
 + Auto Compresses when near 4mb per key limit

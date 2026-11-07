@@ -53,7 +53,7 @@ For a key that many servers read all the time, like the top player on a global l
 local Data, Why = GuildStore:Peek(GuildId, 30)
 ```
 
-If this server read the key in the last 30 seconds, it answers that again for free. Otherwise it reads a copy that all your servers share, which is usually under a minute old, and a few minutes on a key that hasn't changed in a while. Either way, most of these reads cost no DataStore request at all.
+If this server read the key in the last 30 seconds, it answers that again for free. Otherwise it reads a copy that all your servers share, which is usually under a minute old, and a few minutes on a key that hasn't changed in a while. Either way, most of these reads cost no DataStore request at all. As more servers read a key, its shared copy spreads over more MemoryStore maps, so millions of servers can read one key.
 
 Only do this for keys that really are read a lot. The first server to read a key this way keeps the shared copy up to date for the next 30 minutes, which costs it 2 DataStore reads a minute. For a key that's only read now and then, that's far more than a plain `Peek` costs.
 
