@@ -103,7 +103,7 @@ How many Roblox DataStore requests a call makes, with no contention. `read` is a
 | `Peek`, `Inspect`, `Losses`, `Pending` | 1 read. |
 | `Peek(Key, MaxAge)` | None inside `MaxAge`. |
 | `Peek(Key, { Fresh = true })` | 1 write. |
-| `Ledger.Tx`, N keys | N writes before the answer, 2N-1 in all. |
+| `Ledger.Tx`, N keys | N writes before the answer. |
 | `Take`, `Hold`, `Confirm` | 1 write, or with one key in `Legs` 2 before the answer and 3 in all. |
 | `Reset`, `Erase` | 1 write. `Erase` also removes the key. |
 | `Open`, `Close` | One write per part. |
