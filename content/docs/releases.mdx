@@ -5,6 +5,21 @@ description: What changed from v6, and what you have to change with it.
 
 `+` is new in v7, `~` exists in v6 and works differently now, `-` is gone, `!` is something to know before you upgrade.
 
+## 7.3.1 [#731]
+
+Each loaded key holds less memory.
+
+| | 7.3.0 | 7.3.1 |
+|---|---|---|
+| A 100 KB player, just loaded | 616 KB | **485 KB** |
+| A busy 100 KB player | 1,469 KB | **1,209 KB** |
+| A busy 1 MB player | 10.6 MB | **7.4 MB** |
+
+```diff
++ Ledger keeps one entry for each table it has checked instead of three, so a loaded key holds 18 to 30% less memory
+~ Ledger folders got restructured
+```
+
 ## 7.3.0 [#730]
 
 More optimizationsss
