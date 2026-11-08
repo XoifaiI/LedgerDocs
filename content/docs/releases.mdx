@@ -5,6 +5,28 @@ description: What changed from v6, and what you have to change with it.
 
 `+` is new in v7, `~` exists in v6 and works differently now, `-` is gone, `!` is something to know before you upgrade.
 
+## 7.2.0 [#720]
+
+Changes to big player data cost a fraction of the server time they did.
+
+| A 100 KB player | 7.1.0 | 7.2.0 |
+|---|---|---|
+| 200 `Apply` calls and a save | 1,117 ms | **8.5 ms** |
+| 50 `Edit` calls | ~575 ms | **~72 ms** |
+| 50 `Commit` calls | ~611 ms | **~97 ms** |
+| 10 trades between two players | ~239 ms | **~51 ms** |
+| `Unload` | 64 ms | **2.3 ms** |
+
+```diff
++ Checking a change only looks at the tables it touched, not the whole state
++ Decimal numbers are written up to 50x faster
++ A save reuses this server's last copy when nothing else changed the key, instead of checking it again
++ Peek and Follow copies are cut and handed out faster
+! A live server now makes every table inside a reducer's Data, and every table a reducer returns, read-only. Changing one throws and the op is refused, as Studio always did
+! Each loaded key holds more memory: about 1.4 MB against 0.8 MB for a busy 100 KB player
+~ Loading a large, deeply nested state can take a little longer (16 to 22 ms at 1 MB)
+```
+
 ## 7.1.0 [#710]
 
 One key can now be followed by millions of servers, and saves are far smaller.

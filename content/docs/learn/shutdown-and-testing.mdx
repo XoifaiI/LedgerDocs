@@ -139,6 +139,6 @@ In Studio, Ledger watches your reducer more closely than on a live server:
 | The reducer gives a different answer for the same data and op | Don't use `os.time()`, `math.random()` or anything else that changes between calls. Put those in the op instead. |
 | The reducer doesn't return `nil` for a kind it doesn't know | End the reducer with `return nil`. |
 
-These checks only run in Studio, but the rules hold everywhere. A reducer that breaks them on a live server can give players the wrong data.
+On a live server the tables inside `Data` are read-only too, so changing one throws and the op is refused, and every table your reducer returns becomes read-only once the op is taken. The other checks only run in Studio, but the rules hold everywhere. A reducer that breaks them on a live server can give players the wrong data.
 
 Next: [Common mistakes](/docs/learn/common-mistakes)

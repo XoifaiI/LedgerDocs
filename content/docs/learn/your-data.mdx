@@ -117,7 +117,7 @@ Ledger may run your reducer more than once for the same op, so it has to give th
 
 If your reducer errors, Ledger treats it as `nil` and the op is refused. It won't print the error, so wrap risky code in `pcall` while you debug.
 
-Studio helps you catch broken rules. There, your reducer runs three times per op and Ledger warns you if the answers differ. `Data` and `Op` are also read-only in Studio, so a reducer that changes them directly gets every op refused.
+Studio helps you catch broken rules. There, your reducer runs three times per op and Ledger warns you if the answers differ. `Data` and `Op` are also read-only in Studio, so a reducer that changes them directly gets every op refused. On a live server the tables inside `Data` are read-only too, and so is every table your reducer returns, so don't keep a table you returned and change it later.
 
 ## Using it
 
